@@ -11,7 +11,7 @@
 
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
-const VERSION = '0.3.0'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.3.1'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'style.css', 'manifest.json'];
 
@@ -252,6 +252,7 @@ function capture(type, dry) {
             sent = type === 'swipe' || type === 'regenerate' || type === 'continue' ? n - 1 : n;
         }
     }
+    captureSeq++;
     meas = { v: 3, chatId: c.chatId, at: Date.now(), type, est: !!dry, idx, all, sent, len: chat.length, tokens, sig: settingsSig() };
     diag(`capture ${type}${dry ? ' (dry)' : ''} sent=${sent} idx=${idx} all=${all} total=${tokens?.total ?? '-'}${a ? ` chat=${a.chatTok} inj=${a.injTok}` : ''}`);
     if (!dry) {
@@ -289,7 +290,7 @@ function model() {
     const T = list.length;
     const recalcing = !!(recalcTimer || recalcRunning);
     const stale = !!meas && meas.chatId === c.chatId && !!meas.sig && meas.sig !== settingsSig();
-    if (recalcing && (!meas || meas.chatId !== c.chatId || stale)) return { ready: false, T, state: 'recalc', reasons: [] };
+    if (recalcing && (manualMeasure || !meas || meas.chatId !== c.chatId || stale)) return { ready: false, T, state: 'recalc', reasons: [] };
     if (!c.chatId || !meas || meas.chatId !== c.chatId) {
         return { ready: false, T, state: 'idle', reasons: [] };
     }
@@ -339,7 +340,15 @@ function model() {
     }
     if (s.minWindow > 0 && !all && remembered < s.minWindow) {
         level = Math.max(level, 1);
-        reasons.push({ level: 1, text: `AI จำย้อนได้แค่ ${remembered} ข้อความ (ตั้งไว้ขั้นต่ำ ${s.minWindow})`, tip: 'ข้อความยาวมาก หรือส่วนที่ส่งทุกรอบใหญ่เกินไป' });
+        // บอกสาเหตุที่ตรงที่สุด: กันไว้ตอบเยอะ > ส่วนที่ส่งทุกรอบใหญ่ > ข้อความแชทยาว
+        let tip = 'ข้อความแชทแต่ละข้อความยาว งบเลยพอใส่ได้ไม่กี่ข้อความ';
+        if (tk && tk.max && tk.reserve / tk.max >= 0.35) {
+            tip = `กันไว้ให้ AI ตอบ ${fmt(tk.reserve)} จาก Context ${fmt(tk.max)} เหลืองบพรอมท์แค่ ${fmt(tk.budget)} · ลด Max Response Length หรือเพิ่ม Context Size แล้ว AI จะจำได้มากขึ้น`;
+        } else if (tk && fixed / tk.budget >= 0.5) {
+            const big = groups.filter(g => g.key !== 'chat').sort((a, b) => b.tokens - a.tokens)[0];
+            tip = `ส่วนที่ส่งทุกรอบกินงบ ${pct(fixed / tk.budget)}${big ? ` ตัวใหญ่สุดคือ ${big.label} (${fmt(big.tokens)})` : ''}`;
+        }
+        reasons.push({ level: 1, text: `AI จำย้อนได้แค่ ${remembered} ข้อความ (ตั้งไว้ขั้นต่ำ ${s.minWindow})`, tip });
     }
     if (tk && s.fixedPct > 0 && fixed / tk.budget * 100 >= s.fixedPct) {
         level = Math.max(level, 1);
@@ -796,9 +805,11 @@ async function jumpToHorizon() {
 
 async function measureNow() {
     const c = ctx();
-    if (!c.chatId) { toastr.info('เปิดแชทก่อนนะ'); return; }
-    if (typeof c.generate !== 'function') { toastr.warning('ST รุ่นนี้ยังจำลองพรอมท์จาก extension ไม่ได้ — ส่งข้อความหนึ่งครั้งแทน'); return; }
-    if (busy) { toastr.info('รอให้ตอบเสร็จก่อน แล้วจะวัดให้เอง'); }
+    if (!c.chatId) { toastr.info('เปิดแชทก่อนนะ', 'Memory Horizon'); return; }
+    if (typeof c.generate !== 'function') { toastr.warning('ST รุ่นนี้ยังจำลองพรอมท์จาก extension ไม่ได้ — ส่งข้อความหนึ่งครั้งแทน', 'Memory Horizon'); return; }
+    if (c.mainApi !== 'openai') { toastr.info('วัดตอนนี้ใช้ได้กับ Chat Completion · โหมดนี้จะอัปเดตเองหลังส่งข้อความ', 'Memory Horizon'); return; }
+    if (busy) toastr.info('รอให้ AI ตอบเสร็จก่อน แล้วจะวัดให้เอง', 'Memory Horizon', { timeOut: 2500 });
+    manualMeasure = true;
     scheduleRecalc('measure now', 0);
 }
 
@@ -810,6 +821,8 @@ let recalcRunning = false;
 let busy = false;        // กำลังสร้างคำตอบจริงอยู่
 let busyAt = 0;
 let lastRecalcSig = '';
+let manualMeasure = false; // กด "วัดตอนนี้" — แสดงหน้ากำลังคำนวณ และบอกผลเมื่อเสร็จ
+let captureSeq = 0;
 
 function scheduleRecalc(why, delay = 900) {
     const c = ctx();
@@ -829,15 +842,29 @@ async function runRecalc(why) {
     lastRecalcSig = settingsSig();
     diag(`recalc: ${why}`);
     refresh();
+    const before = captureSeq;
+    let error = null;
     try {
         userDryRun = true;
         await c.generate('normal', {}, true);
     } catch (err) {
+        error = err;
         diag(`recalc failed: ${err?.message ?? err}`);
     } finally {
         userDryRun = false;
         recalcRunning = false;
+        const manual = manualMeasure;
+        manualMeasure = false;
         refresh();
+        if (manual) {
+            if (captureSeq === before) {
+                toastr.warning(`จำลองพรอมท์ไม่สำเร็จ${error ? `: ${esc(error.message ?? error)}` : ' — ST ไม่ได้ประกอบพรอมท์ให้'}<br><small>ส่งข้อความหนึ่งครั้งแทนได้ ตัวเลขจะอัปเดตเอง</small>`, 'Memory Horizon', { escapeHtml: false, timeOut: 6000 });
+            } else {
+                const m = model();
+                const what = !m.ready ? 'เสร็จแล้ว' : m.all ? 'AI ยังจำได้ทั้งแชท' : `AI จำย้อนได้ ${m.remembered} ข้อความ`;
+                toastr.success(`วัดใหม่แล้ว · ${what}`, 'Memory Horizon', { timeOut: 2500 });
+            }
+        }
     }
 }
 
