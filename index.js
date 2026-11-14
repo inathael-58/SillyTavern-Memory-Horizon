@@ -11,7 +11,7 @@
 
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
-const VERSION = '0.2.0'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.2.1'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'style.css', 'manifest.json'];
 
@@ -126,11 +126,40 @@ const nonHidden = chat => {
     return out;
 };
 
+/**
+ * นับข้อความแชทที่ ST ใส่ลงพรอมท์จริง จากโครงสร้างใน Prompt Manager ตอนประกอบพรอมท์
+ * (ข้อความแชทแต่ละอันมี identifier "chatHistory-N") — อ่านก่อนที่ extension อื่นจะแก้พรอมท์
+ * ใน CHAT_COMPLETION_PROMPT_READY จึงไม่เพี้ยนเวลามีตัวที่รวมหลายข้อความเป็นก้อนเดียว
+ * นับเฉพาะ user/assistant/tool เหมือน openai_messages_count ของ ST (ข้อความแทรกแบบ system ไม่นับ)
+ * @returns {number|null}
+ */
+function chatHistoryCount() {
+    const top = oai?.promptManager?.messages;
+    if (!Array.isArray(top?.collection)) return null;
+    const hist = top.collection.find(x => x?.identifier === 'chatHistory');
+    if (!Array.isArray(hist?.collection)) return null;
+    let n = 0;
+    const walk = col => {
+        for (const it of col.collection) {
+            if (!it) continue;
+            if (Array.isArray(it.collection)) { walk(it); continue; }
+            const id = String(it.identifier ?? '');
+            if (it.role === 'tool' || (/^chatHistory-\d+$/.test(id) && (it.role === 'user' || it.role === 'assistant'))) n++;
+        }
+    };
+    walk(hist);
+    return n;
+}
+
 /** จำนวนข้อความแชทที่อยู่ในพรอมท์รอบนี้ ตามแบบเดียวกับ setInContextMessages() ของ ST */
 function includedCount(type, dry) {
     const c = ctx();
-    if (c.mainApi === 'openai' && oai && Number.isFinite(oai.openai_messages_count)) {
-        let n = oai.openai_messages_count;
+    if (c.mainApi === 'openai' && oai) {
+        const pm = chatHistoryCount();
+        const st = Number.isFinite(oai.openai_messages_count) ? oai.openai_messages_count : null;
+        if (pm !== null && st !== null && pm !== st) diag(`count differs: prompt manager ${pm} · after prompt-ready ${st} (an extension rewrote the prompt)`);
+        let n = pm ?? st;
+        if (n === null) return null;
         if (type === 'swipe' || type === 'regenerate' || type === 'continue') n++;
         return n;
     }
@@ -163,7 +192,7 @@ function capture(type, dry) {
         idx = all ? (list[0] ?? 0) : list[list.length - n];
         sent = type === 'swipe' || type === 'regenerate' || type === 'continue' ? n - 1 : n;
     }
-    meas = { v: 1, chatId: c.chatId, at: Date.now(), type, est: !!dry, idx, all, sent, len: chat.length, tokens: readTokens() };
+    meas = { v: 2, chatId: c.chatId, at: Date.now(), type, est: !!dry, idx, all, sent, len: chat.length, tokens: readTokens() };
     diag(`capture ${type}${dry ? ' (dry)' : ''} n=${n} idx=${idx} all=${all} total=${meas.tokens?.total ?? '-'}`);
     if (!dry) {
         try { c.chatMetadata[MODULE] = meas; } catch { /* ignore */ }
@@ -176,12 +205,13 @@ function loadForChat() {
     meas = null;
     if (!c.chatId) return;
     const saved = c.chatMetadata?.[MODULE];
-    if (saved?.v === 1 && Number.isInteger(saved.idx)) {
-        meas = { ...saved, chatId: c.chatId };
+    if ((saved?.v === 1 || saved?.v === 2) && Number.isInteger(saved.idx)) {
+        // v1 (ก่อน 0.2.1) นับข้อความหลังจาก extension อื่นแก้พรอมท์แล้ว อาจเพี้ยน — ถือเป็นค่าประมาณจนกว่าจะวัดใหม่
+        meas = { ...saved, chatId: c.chatId, est: saved.est || saved.v === 1 };
     } else if (Number.isInteger(c.chatMetadata?.lastInContextMessageId) && c.chat?.length) {
         // จากเซสชันก่อนของ ST เอง — ใช้เป็นค่าประมาณ
         const idx = c.chatMetadata.lastInContextMessageId;
-        meas = { v: 1, chatId: c.chatId, at: 0, type: 'st', est: true, idx, all: idx <= 0, sent: 0, len: c.chat.length, tokens: null };
+        meas = { v: 2, chatId: c.chatId, at: 0, type: 'st', est: true, idx, all: idx <= 0, sent: 0, len: c.chat.length, tokens: null };
     }
     lastAlert = { chatId: c.chatId, level: 0 };
 }
