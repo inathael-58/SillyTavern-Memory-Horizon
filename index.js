@@ -22,7 +22,7 @@ const PLACES = Object.freeze({
     top: { label: 'หัวแชท', hint: 'ป้ายลอยกลางขอบบนของแชท' },
     float: { label: 'ปุ่มลอย', hint: 'ลากวางได้ · เก็บเข้า Quick Dock ได้' },
 });
-const SIZES = Object.freeze({ mini: 'มินิ (ภาพอย่างเดียว)', compact: 'ย่อ', full: 'เต็ม' });
+const SIZES = Object.freeze({ mini: 'มินิ', compact: 'ย่อ', full: 'เต็ม' });
 const FIELDS = Object.freeze({
     horizon: 'จำย้อนได้กี่ข้อความ',
     room: 'ที่ว่างก่อนเริ่มลืม',
@@ -32,10 +32,10 @@ const FIELDS = Object.freeze({
     percent: 'ใช้งบไปกี่ %',
 });
 const ACCENTS = Object.freeze({
-    quote: ['คำพูด (Quote)', '--SmartThemeQuoteColor'],
-    em: ['ตัวเอียง (Italics)', '--SmartThemeEmColor'],
-    underline: ['ขีดเส้นใต้ (Underline)', '--SmartThemeUnderlineColor'],
-    body: ['ตัวอักษรหลัก (Main Text)', '--SmartThemeBodyColor'],
+    quote: ['คำพูด', '--SmartThemeQuoteColor'],
+    em: ['ตัวเอียง', '--SmartThemeEmColor'],
+    underline: ['ขีดเส้นใต้', '--SmartThemeUnderlineColor'],
+    body: ['ตัวอักษรหลัก', '--SmartThemeBodyColor'],
 });
 
 const DEFAULTS = Object.freeze({
@@ -765,7 +765,7 @@ function drawerHTML() {
         <div class="inline-drawer-content">
           <label class="checkbox_label"><input type="checkbox" id="mh_enabled" ${s.enabled ? 'checked' : ''}><span>เปิดใช้งาน</span></label>
 
-          <h4>ป้ายแสดงผล <small class="mh-muted">เลือกได้หลายจุด แต่ละจุดเลือกขนาดเองได้</small></h4>
+          <h4>ป้ายแสดงผล <small class="mh-muted">เลือกได้หลายจุด แต่ละจุดเลือกขนาดเองได้ · มินิ = ภาพอย่างเดียว</small></h4>
           <div class="mh-set-places">${placeRows}</div>
           <div class="flex-container"><div class="menu_button menu_button_icon" id="mh_float_reset"><i class="fa-solid fa-arrows-to-dot"></i><span>คืนตำแหน่งปุ่มลอย</span></div></div>
 
@@ -784,7 +784,7 @@ function drawerHTML() {
           <label class="checkbox_label"><input type="checkbox" id="mh_toast" ${s.toast ? 'checked' : ''}><span>แจ้งเตือนแบบป๊อปอัป</span></label>
 
           <h4>สี</h4>
-          <div class="mh-set-num"><span>สีเน้นดึงจากธีม</span><select class="text_pole" id="mh_accent">${Object.entries(ACCENTS).map(([k, [l]]) => `<option value="${k}" ${s.accent === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+          <div class="mh-set-row"><span>สีเน้นดึงจากธีม</span><select class="text_pole" id="mh_accent">${Object.entries(ACCENTS).map(([k, [l]]) => `<option value="${k}" ${s.accent === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
           <small class="mh-muted">สีอื่นทั้งหมดผสมจากสีธีมปัจจุบัน เปลี่ยนธีมแล้วเปลี่ยนตามเอง ไม่ต้องเขียน CSS</small>
 
           <hr>
