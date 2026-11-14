@@ -11,13 +11,12 @@
 
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
-const VERSION = '0.1.1'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.2.0'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'style.css', 'manifest.json'];
 
 const PLACES = Object.freeze({
-    send: { label: 'ข้างปุ่มส่ง', hint: 'ชิปเล็กในแถบพิมพ์ ฝั่งขวา' },
-    left: { label: 'ฝั่งซ้ายช่องพิมพ์', hint: 'ข้างปุ่มไม้กายสิทธิ์' },
+    perch: { label: 'เกาะขอบแถบพิมพ์', hint: 'ป้ายเล็กลอยเหนือแถบพิมพ์ ไม่เบียดช่องพิมพ์' },
     strip: { label: 'เส้นบนช่องพิมพ์', hint: 'เส้นไทม์ไลน์บาง ๆ พาดขอบบนแถบพิมพ์' },
     top: { label: 'หัวแชท', hint: 'ป้ายลอยกลางขอบบนของแชท' },
     float: { label: 'ปุ่มลอย', hint: 'ลากวางได้ · เก็บเข้า Quick Dock ได้' },
@@ -41,8 +40,7 @@ const ACCENTS = Object.freeze({
 const DEFAULTS = Object.freeze({
     enabled: true,
     places: {
-        send: { on: true, size: 'compact' },
-        left: { on: false, size: 'mini' },
+        perch: { on: true, size: 'compact' },
         strip: { on: false, size: 'mini' },
         top: { on: false, size: 'compact' },
         float: { on: false, size: 'mini' },
@@ -57,7 +55,9 @@ const DEFAULTS = Object.freeze({
     toast: true,
     accent: 'quote',
     floatPos: null,     // { x, y } px จากมุมซ้ายบน
+    side: 'left',       // ป้ายเกาะขอบ / ป้ายบนเส้น อยู่ฝั่งไหนของแถบพิมพ์
 });
+const SIDES = Object.freeze({ left: 'ซ้าย', right: 'ขวา' });
 
 // กลุ่มของ identifier ใน Prompt Manager
 const GROUPS = [
@@ -81,6 +81,14 @@ function settings() {
     all[MODULE] ??= {};
     const s = all[MODULE];
     for (const [k, v] of Object.entries(DEFAULTS)) if (s[k] === undefined) s[k] = structuredClone(v);
+    // 0.1.x มีชิปในแถบพิมพ์ (send/left) ซึ่งเบียดช่องพิมพ์ — ย้ายไปเป็นป้ายเกาะขอบแทน
+    if (s.places.send || s.places.left) {
+        const old = [s.places.send, s.places.left].find(p => p?.on);
+        if (old && !s.places.perch) s.places.perch = { on: true, size: old.size };
+        delete s.places.send;
+        delete s.places.left;
+    }
+    if (!SIDES[s.side]) s.side = DEFAULTS.side;
     for (const [k, v] of Object.entries(DEFAULTS.places)) {
         s.places[k] ??= structuredClone(v);
         if (!SIZES[s.places[k].size]) s.places[k].size = v.size;
@@ -320,8 +328,7 @@ let skipClick = false;
 
 function mountPoint(place) {
     switch (place) {
-        case 'send': return { parent: document.getElementById('rightSendForm'), how: 'prepend' };
-        case 'left': return { parent: document.getElementById('leftSendForm'), how: 'append' };
+        case 'perch': return { parent: document.getElementById('send_form'), how: 'append' };
         case 'strip': return { parent: document.getElementById('send_form'), how: 'append' };
         case 'top': return { parent: document.getElementById('sheld'), how: 'append' };
         case 'float': return { parent: document.body, how: 'append' };
@@ -343,7 +350,7 @@ function ensureBadges() {
         const { parent, how } = mountPoint(place);
         if (!parent) continue;
         if (!el) el = createBadge(place);
-        if (place === 'strip' && getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+        if ((place === 'strip' || place === 'perch') && getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
         if (how === 'prepend') parent.prepend(el); else parent.append(el);
         badges.set(place, el);
         if (place === 'float') placeFloat();
@@ -381,39 +388,27 @@ function renderBadges(m) {
         el.classList.toggle('mh-state-watch', m.state === 'watch');
         el.classList.toggle('mh-state-over', m.state === 'over');
         el.classList.toggle('mh-state-idle', m.state === 'idle');
+        el.classList.toggle('mh-side-right', s.side === 'right');
 
         const texts = fields.map(k => fieldText(k, m)).filter(Boolean);
         const tl = `<span class="mh-tl">${segHTML(m) || '<i class="mh-seg mh-seg-empty" style="flex-basis:100%"></i>'}</span>`;
         const dot = '<i class="mh-dot"></i>';
         let text = '';
         if (!m.ready) text = size === 'mini' ? '' : '<span class="mh-txt mh-muted">รอวัด</span>';
-        // แบบย่อแสดงแค่ 2 ช่องแรกที่มีค่า (ตามลำดับในตั้งค่า) ให้ป้ายสั้นพอวางในแถบพิมพ์
+        // แบบย่อแสดงแค่ 2 ช่องแรกที่มีค่า (ตามลำดับในตั้งค่า) ให้ป้ายสั้น
         else if (size === 'compact') text = texts.length ? `<span class="mh-txt">${texts.slice(0, 2).map(t => esc(t[0])).join('<b class="mh-sep">·</b>')}</span>` : '';
         else if (size === 'full') text = texts.length ? `<span class="mh-txt mh-txt-full">${texts.map(t => `<span>${esc(t[1])}</span>`).join('')}</span>` : '';
 
         if (place === 'strip') {
-            el.innerHTML = `<span class="mh-strip-track">${segHTML(m)}</span>${size !== 'mini' && text ? `<span class="mh-strip-label">${dot}${text}</span>` : ''}`;
+            // ถ้าเปิดป้ายเกาะขอบด้วย ไม่ต้องมีป้ายตัวเลขบนเส้นซ้ำ
+            const label = size !== 'mini' && text && !badges.has('perch');
+            el.innerHTML = `<span class="mh-strip-track">${segHTML(m)}</span>${label ? `<span class="mh-strip-label">${dot}${text}</span>` : ''}`;
         } else {
             el.innerHTML = `<span class="mh-glyph">${tl}${dot}</span>${text}`;
         }
         const label = (texts.map(t => t[1]).join(' · ') || (m.ready ? STATE_LABEL[m.state] : 'ยังไม่ได้วัด')) + (m.ready && m.est ? ' (ค่าประมาณ)' : '');
         el.setAttribute('aria-label', `Memory Horizon: ${label}`);
         el.title = `Memory Horizon — ${label}`;
-    }
-    fitSendBar();
-}
-
-/** ชิปในแถบพิมพ์: ถ้าช่องพิมพ์เหลือแคบเกินไป (จอมือถือ) ซ่อนข้อความ เหลือแต่ภาพ */
-const MIN_TEXTAREA = 150; // px
-function fitSendBar() {
-    const chips = ['send', 'left'].map(p => badges.get(p)).filter(el => el?.isConnected);
-    if (!chips.length) return;
-    const ta = document.getElementById('send_textarea');
-    for (const el of chips) el.classList.remove('mh-squeeze');
-    if (!ta) return;
-    for (const el of chips) {
-        if (ta.getBoundingClientRect().width >= MIN_TEXTAREA) break;
-        if (el.dataset.size !== 'mini') el.classList.add('mh-squeeze');
     }
 }
 
@@ -586,7 +581,7 @@ function renderSheet() {
     const head = `
         <div class="mh-head">
             <span class="mh-logo" aria-hidden="true">${LOGO_SVG}</span>
-            <div class="mh-title"><b>Memory Horizon</b><small>${esc(ctx().name2 || '')}</small></div>
+            <div class="mh-title"><b>Memory Horizon <span class="mh-vertag">v${VERSION}</span></b><small>${esc(ctx().name2 || '')}</small></div>
             <span class="mh-pill mh-pill-${m.state}">${STATE_LABEL[m.state]}</span>
             <button class="mh-close" data-act="close" title="ปิด" aria-label="ปิด"><i class="fa-solid fa-xmark"></i></button>
         </div>`;
@@ -604,7 +599,7 @@ function renderSheet() {
 
     const hero = m.all
         ? `<div class="mh-hero">
-                <div class="mh-big">ทั้งแชท</div>
+                <div class="mh-big mh-big-text">ทั้งแชท</div>
                 <div class="mh-hero-sub">AI ยังจำได้ครบทั้ง ${fmt(m.T)} ข้อความ${m.room !== null ? ` · เหลืออีก <b>${fmt(m.room)}</b> token ก่อนเริ่มลืม` : ''}</div>
            </div>`
         : `<div class="mh-hero">
@@ -774,14 +769,21 @@ function drawerHTML() {
     <div id="mh_settings" class="mh-settings">
       <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-          <b>Memory Horizon</b>
+          <b>Memory Horizon <small class="mh-vertag">v${VERSION}</small></b>
           <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
+          <div class="flex-container mh-top-btns">
+            <div class="menu_button menu_button_icon" id="mh_open"><i class="fa-solid fa-mountain-sun"></i><span>เปิดรายละเอียด</span></div>
+            <div class="menu_button menu_button_icon" id="mh_vcheck"><i class="fa-solid fa-magnifying-glass"></i><span>เช็คเวอร์ชัน</span></div>
+            <div class="menu_button menu_button_icon" id="mh_reload" title="ดึงไฟล์ของ Memory Horizon จากเซิร์ฟเวอร์ใหม่ทั้งหมดแล้วโหลดหน้าใหม่"><i class="fa-solid fa-rotate"></i><span>โหลดเวอร์ชันล่าสุด</span></div>
+          </div>
+          <div class="mh-verline">ที่รันอยู่: <b>v${VERSION}</b> <span data-mh-remote></span></div>
           <label class="checkbox_label"><input type="checkbox" id="mh_enabled" ${s.enabled ? 'checked' : ''}><span>เปิดใช้งาน</span></label>
 
           <h4>ป้ายแสดงผล <small class="mh-muted">เลือกได้หลายจุด แต่ละจุดเลือกขนาดเองได้ · มินิ = ภาพอย่างเดียว</small></h4>
           <div class="mh-set-places">${placeRows}</div>
+          <div class="mh-set-row"><span>ป้ายเกาะขอบ / ป้ายบนเส้น อยู่ฝั่ง</span><select class="text_pole" id="mh_side">${Object.entries(SIDES).map(([k, l]) => `<option value="${k}" ${s.side === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
           <div class="flex-container"><div class="menu_button menu_button_icon" id="mh_float_reset"><i class="fa-solid fa-arrows-to-dot"></i><span>คืนตำแหน่งปุ่มลอย</span></div></div>
 
           <h4>ข้อมูลบนป้าย <small class="mh-muted">แบบย่อแสดงสั้น ๆ แบบเต็มแสดงเป็นประโยค · ช่องที่ไม่มีค่าจะซ่อนเอง</small></h4>
@@ -804,15 +806,12 @@ function drawerHTML() {
 
           <hr>
           <div class="flex-container">
-            <div class="menu_button menu_button_icon" id="mh_open"><i class="fa-solid fa-mountain-sun"></i><span>เปิดรายละเอียด</span></div>
             <div class="menu_button menu_button_icon" id="mh_diag"><i class="fa-solid fa-stethoscope"></i><span>ตรวจปัญหา</span></div>
-            <div class="menu_button menu_button_icon" id="mh_reload"><i class="fa-solid fa-cloud-arrow-down"></i><span>โหลดไฟล์ล่าสุด</span></div>
           </div>
           <div id="mh_diag_box" class="mh-diag" hidden>
             <textarea class="text_pole" rows="10" readonly></textarea>
             <div class="menu_button" id="mh_diag_copy">คัดลอกรายงาน</div>
           </div>
-          <small class="mh-muted" id="mh_version">v${VERSION}</small>
         </div>
       </div>
     </div>`;
@@ -860,27 +859,56 @@ function mountDrawer() {
         try { await navigator.clipboard.writeText(ta.value); toastr.success('คัดลอกแล้ว'); }
         catch { ta.select(); toastr.info('เลือกข้อความไว้แล้ว กดคัดลอกเองได้เลย'); }
     });
+    root.querySelector('#mh_side').addEventListener('change', e => { s.side = e.target.value; changed(); });
     root.querySelector('#mh_reload').addEventListener('click', reloadLatest);
-    checkRemoteVersion();
+    root.querySelector('#mh_vcheck').addEventListener('click', async () => {
+        const v = await checkRemoteVersion(true);
+        if (!v) toastr.warning('อ่านเวอร์ชันบนเซิร์ฟเวอร์ไม่ได้', 'Memory Horizon');
+        else if (!newer(v, VERSION)) toastr.success(`v${VERSION} เป็นเวอร์ชันล่าสุดที่ติดตั้งไว้แล้ว`, 'Memory Horizon');
+    });
+    checkRemoteVersion(true);
 }
 
-let remoteVersion = null;
-async function checkRemoteVersion() {
+// ST โหลดไฟล์ extension ด้วย URL เดิมเสมอ เบราว์เซอร์ (และแอปบนหน้าจอโฮมของ iOS) จึงมักใช้ไฟล์เก่า
+// จาก cache ต่อหลังกด Update — เทียบกับ manifest บนเซิร์ฟเวอร์ ถ้าใหม่กว่าให้บอก และดึงไฟล์ใหม่ให้
+let remoteVersion = '';
+let versionCheckedAt = 0;
+let versionToastShown = false;
+const newer = (a, b) => {
+    const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+    return false;
+};
+async function checkRemoteVersion(force = false) {
+    if (!force && Date.now() - versionCheckedAt < 10 * 60_000) return remoteVersion;
+    versionCheckedAt = Date.now();
     try {
         const r = await fetch(new URL('manifest.json', BASE_URL), { cache: 'no-store' });
-        remoteVersion = (await r.json()).version;
-        const el = document.getElementById('mh_version');
-        if (el) el.textContent = remoteVersion && remoteVersion !== VERSION
-            ? `v${VERSION} กำลังทำงาน · ไฟล์บนเซิร์ฟเวอร์เป็น v${remoteVersion} — กด “โหลดไฟล์ล่าสุด”`
-            : `v${VERSION}`;
-    } catch { /* ignore */ }
+        remoteVersion = r.ok ? String((await r.json())?.version ?? '') : '';
+    } catch { remoteVersion = ''; }
+    const stale = remoteVersion && newer(remoteVersion, VERSION);
+    document.querySelectorAll('[data-mh-remote]').forEach(el => {
+        el.innerHTML = !remoteVersion ? '' : stale
+            ? `· ติดตั้งไว้ <b>v${esc(remoteVersion)}</b> <span class="mh-stale">ยังไม่ได้โหลด กด “โหลดเวอร์ชันล่าสุด”</span>`
+            : '· เป็นเวอร์ชันล่าสุดที่ติดตั้งไว้แล้ว';
+    });
+    if (stale && !versionToastShown) {
+        versionToastShown = true;
+        toastr.info(`ติดตั้ง v${esc(remoteVersion)} ไว้แล้ว แต่หน้านี้ยังรัน v${VERSION} อยู่<br>แตะที่นี่เพื่อโหลดเวอร์ชันใหม่`, 'Memory Horizon', {
+            timeOut: 0, extendedTimeOut: 0, closeButton: true, escapeHtml: false, onclick: () => reloadLatest(),
+        });
+    }
+    return remoteVersion;
 }
 
 async function reloadLatest() {
     try {
-        await Promise.all(FILES.map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' })));
-    } catch { /* ignore */ }
-    location.reload();
+        toastr.info('กำลังดึงไฟล์ใหม่…', 'Memory Horizon', { timeOut: 2000 });
+        // cache: 'reload' ดึงจากเซิร์ฟเวอร์แล้วเขียนทับ cache ของเบราว์เซอร์ หน้าที่โหลดใหม่จึงได้ไฟล์ใหม่
+        await Promise.all(FILES.map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
+    } finally {
+        location.reload();
+    }
 }
 
 function fixedBreakers(el) {
@@ -981,7 +1009,7 @@ function wireEvents() {
 
     const chatEl = document.getElementById('chat');
     if (chatEl) new MutationObserver(scheduleMarker).observe(chatEl, { childList: true });
-    window.addEventListener('resize', () => { placeFloat(); fitSendBar(); });
+    window.addEventListener('resize', placeFloat);
     window.visualViewport?.addEventListener('resize', placeFloat);
     // ST หรือ extension อื่นสร้างแถบพิมพ์ใหม่ / Quick Dock คืนปุ่ม — เช็กทุก 3 วิ
     setInterval(() => { if (settings().enabled && [...badges.values()].some(b => !b.isConnected)) refresh(); }, 3000);
