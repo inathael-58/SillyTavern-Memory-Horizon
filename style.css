@@ -473,6 +473,14 @@
 .mh-reply-bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; min-width: 3px; transition: width .45s cubic-bezier(.3, .7, .2, 1); }
 .mh-reply-max { background: color-mix(in oklab, var(--mh-acc) 38%, var(--mh-faint)); }
 .mh-reply-last { background: var(--mh-acc); }
+.mh-reply-think { background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--mh-acc) 45%, transparent) 0 3px, transparent 3px 6px); }
+.mh-sw.mh-reply-think { position: static; }
+.mh-think-row input.mh-think {
+    width: 76px; box-sizing: border-box; margin: 0; padding: 3px 6px;
+    text-align: right; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums;
+    color: var(--mh-fg); background: var(--mh-soft); border: 1px solid var(--mh-line); border-radius: 8px;
+}
+.mh-think-row input.mh-think:focus { outline: none; border-color: var(--mh-acc); }
 .mh-sw.mh-reply-max, .mh-sw.mh-reply-last { position: static; }
 .mh-row-l small { font-size: 11px; }
 .mh-reply-advice { margin-top: 10px; }

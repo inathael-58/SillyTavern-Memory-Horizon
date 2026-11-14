@@ -11,7 +11,7 @@
 
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
-const VERSION = '0.3.2'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.3.3'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'style.css', 'manifest.json'];
 
@@ -56,7 +56,9 @@ const DEFAULTS = Object.freeze({
     accent: 'quote',
     floatPos: null,     // { x, y } px จากมุมซ้ายบน
     side: 'left',       // ป้ายเกาะขอบ / ป้ายบนเส้น อยู่ฝั่งไหนของแถบพิมพ์
+    thinkAllow: {},     // เผื่อความคิดภายในที่มองไม่เห็น แยกตามโมเดล { model: tokens }
 });
+const THINK_DEFAULT = 8000;
 const SIDES = Object.freeze({ left: 'ซ้าย', right: 'ขวา' });
 
 // กลุ่มของ identifier ใน Prompt Manager
@@ -90,6 +92,7 @@ function settings() {
         delete s.places.left;
     }
     if (!SIDES[s.side]) s.side = DEFAULTS.side;
+    if (!s.thinkAllow || typeof s.thinkAllow !== 'object') s.thinkAllow = {};
     for (const [k, v] of Object.entries(DEFAULTS.places)) {
         s.places[k] ??= structuredClone(v);
         if (!SIZES[s.places[k].size]) s.places[k].size = v.size;
@@ -623,16 +626,25 @@ function scheduleReplyStats() {
     replyTimer = setTimeout(() => { computeReplyStats().then(renderSheet).catch(err => diag(`reply stats: ${err?.message ?? err}`)); }, 300);
 }
 
+function currentModel() {
+    if (ctx().mainApi !== 'openai') return '';
+    try { return String(oai?.getChatCompletionModel?.() ?? ''); } catch { return ''; }
+}
+
 async function computeReplyStats() {
     const c = ctx();
     const chat = Array.isArray(c.chat) ? c.chat : [];
+    const model = currentModel();
     const picks = [];
+    let others = 0;
+    // เทียบเฉพาะคำตอบของโมเดลที่ใช้อยู่: ความยาว ความคิด และ tokenizer ต่างกันมากในแต่ละโมเดล
     for (let i = chat.length - 1; i >= 0 && picks.length < REPLY_WINDOW; i--) {
         const m = chat[i];
         if (!m || m.is_user || m.is_system || (!m.mes && !m.extra?.reasoning)) continue;
+        if (model && m.extra?.model && m.extra.model !== model) { others++; continue; }
         picks.push(i);
     }
-    if (!picks.length) { replyStats = null; return; }
+    if (!picks.length) { replyStats = { chatId: c.chatId, model, n: 0, others }; return; }
     const items = [];
     for (const i of picks) {
         const m = chat[i];
@@ -651,38 +663,56 @@ async function computeReplyStats() {
         items.push({ idx: i, ...v });
     }
     const top = items.reduce((a, b) => (b.total > a.total ? b : a));
-    replyStats = { chatId: c.chatId, last: items[0], max: top.total, maxIdx: top.idx, n: items.length };
+    replyStats = { chatId: c.chatId, model, last: items[0], max: top.total, maxIdx: top.idx, n: items.length, others };
 }
 
-/** ค่า Max Response Length ที่แนะนำ: 3 เท่าของคำตอบยาวสุด (เผื่อความคิดที่มองไม่เห็น) ไม่ต่ำกว่า 16,000 */
-const suggestReserve = maxUsed => Math.max(16000, Math.ceil((maxUsed * 3) / 1000) * 1000);
+const thinkAllowFor = model => {
+    const v = Number(settings().thinkAllow?.[model || '*']);
+    return Number.isFinite(v) && v >= 0 ? v : THINK_DEFAULT;
+};
+/** ค่า Max Response Length ที่แนะนำ: (คำตอบยาวสุดของโมเดลนี้ + ที่เผื่อความคิดภายใน) × 1.25 ปัดขึ้นหลักพัน ไม่ต่ำกว่า 8,000 */
+const suggestReserve = (maxUsed, allow) => Math.max(8000, Math.ceil(((maxUsed + allow) * 1.25) / 1000) * 1000);
+const shortModel = name => { const t = String(name || ''); return t.length > 30 ? t.slice(0, 29) + '…' : t; };
 
 function replyCardHTML(m) {
     const r = replyStats;
     if (!m.tk || !r || r.chatId !== ctx().chatId) return '';
     const reserve = m.tk.reserve;
     if (!reserve) return '';
+    const model = r.model;
+    const allow = thinkAllowFor(model);
+    const allowInput = `<div class="mh-row mh-think-row"><i class="mh-sw mh-reply-think"></i><span class="mh-row-l">เผื่อความคิดภายในที่มองไม่เห็น${model ? ` <small class="mh-muted">(${esc(shortModel(model))})</small>` : ''}</span><input type="number" class="mh-think" data-think="${esc(model || '*')}" min="0" max="200000" step="500" value="${allow}" inputmode="numeric" aria-label="เผื่อความคิดภายใน"><span class="mh-row-p">${pct(allow / reserve)}</span></div>`;
+    const foot = `<div class="mh-foot">นับข้อความคำตอบและความคิดที่ ST เก็บไว้ ด้วย tokenizer ของโมเดลปัจจุบัน · ความคิดภายในที่โมเดลไม่ส่งออกมา ST ไม่ได้บันทึกไว้ — ตั้ง “เผื่อความคิด” ให้พอกับโมเดลนี้ (แต่ละโมเดลจำค่าแยกกัน)${r.others ? ` · ข้ามคำตอบจากโมเดลอื่น ${r.others} ข้อความ` : ''}</div>`;
+    const title = `<div class="mh-card-title">ที่กันไว้ให้ AI ตอบ <span class="mh-muted">${fmt(reserve)}</span></div>`;
+    if (!r.n) {
+        return `<div class="mh-card mh-reply">${title}
+            <div class="mh-note mh-muted">ยังไม่มีคำตอบจาก${model ? ` ${esc(shortModel(model))}` : 'โมเดลนี้'}ในแชทนี้ — ส่งข้อความสักครั้งแล้วจะเทียบให้</div>
+            <div class="mh-rows">${allowInput}</div>${foot}</div>`;
+    }
     const w = v => `${Math.max(0.6, Math.min(100, (v / reserve) * 100)).toFixed(2)}%`;
-    const sug = suggestReserve(r.max);
+    const need = r.max + allow;
+    const sug = suggestReserve(r.max, allow);
     let advice = '';
-    if (r.max > reserve * 0.85) {
-        advice = `<div class="mh-reason mh-reason-watch"><i class="fa-solid fa-triangle-exclamation"></i><div><b>คำตอบเกือบชนเพดานที่กันไว้</b><small>คำตอบยาว ๆ อาจถูกตัดกลางประโยค ลองเพิ่ม Max Response Length</small></div></div>`;
-    } else if (reserve >= sug * 1.5) {
-        advice = `<div class="mh-reason mh-reason-ok"><i class="fa-solid fa-lightbulb"></i><div><b>ใช้จริงไม่ถึง ${pct(r.max / reserve)} ของที่กันไว้</b><small>ลด Max Response Length เหลือราว ${fmt(sug)} จะได้งบพรอมท์เพิ่ม ${fmt(reserve - sug)} token ให้ AI จำแชทได้มากขึ้น · ถ้าคำตอบเริ่มขาดกลางประโยคหรือว่างเปล่า ให้ขยับขึ้น</small></div></div>`;
+    if (need > reserve) {
+        advice = `<div class="mh-reason mh-reason-watch"><i class="fa-solid fa-triangle-exclamation"></i><div><b>คำตอบยาวสุด + ที่เผื่อความคิด เกินที่กันไว้</b><small>คำตอบอาจขาดกลางประโยคหรือว่างเปล่า · ลองเพิ่ม Max Response Length เป็นราว ${fmt(sug)}</small></div></div>`;
+    } else if (reserve >= sug * 1.3) {
+        advice = `<div class="mh-reason mh-reason-ok"><i class="fa-solid fa-lightbulb"></i><div><b>กันไว้เกินที่ใช้จริงราว ${fmt(reserve - need)} token</b><small>ลด Max Response Length เหลือราว ${fmt(sug)} จะได้งบพรอมท์เพิ่ม ${fmt(reserve - sug)} ให้ AI จำแชทได้มากขึ้น · ถ้าคำตอบเริ่มขาดหรือว่างเปล่า ให้เพิ่มที่เผื่อความคิดแล้วดูค่าใหม่</small></div></div>`;
     }
     return `
         <div class="mh-card mh-reply">
-            <div class="mh-card-title">ที่กันไว้ให้ AI ตอบ <span class="mh-muted">${fmt(reserve)}</span></div>
+            ${title}
             <div class="mh-reply-bar">
+                <i class="mh-reply-think" style="left:${w(r.max)};width:${w(allow)}"></i>
                 <i class="mh-reply-max" style="width:${w(r.max)}"></i>
                 <i class="mh-reply-last" style="width:${w(r.last.total)}"></i>
             </div>
             <div class="mh-rows">
                 <div class="mh-row"><i class="mh-sw mh-reply-last"></i><span class="mh-row-l">คำตอบล่าสุด · #${r.last.idx}${r.last.reason ? ` <small class="mh-muted">(ความคิดที่แสดง ${fmt(r.last.reason)})</small>` : ''}</span><span class="mh-row-v">${fmt(r.last.total)}</span><span class="mh-row-p">${pct(r.last.total / reserve)}</span></div>
-                <div class="mh-row"><i class="mh-sw mh-reply-max"></i><span class="mh-row-l">ยาวสุดใน ${r.n} คำตอบล่าสุด · #${r.maxIdx}</span><span class="mh-row-v">${fmt(r.max)}</span><span class="mh-row-p">${pct(r.max / reserve)}</span></div>
+                <div class="mh-row"><i class="mh-sw mh-reply-max"></i><span class="mh-row-l">ยาวสุดใน ${r.n} คำตอบล่าสุดของโมเดลนี้ · #${r.maxIdx}</span><span class="mh-row-v">${fmt(r.max)}</span><span class="mh-row-p">${pct(r.max / reserve)}</span></div>
+                ${allowInput}
             </div>
             ${advice ? `<div class="mh-status mh-reply-advice">${advice}</div>` : ''}
-            <div class="mh-foot">นับข้อความคำตอบและความคิดที่ ST เก็บไว้ · ความคิดภายในที่โมเดลไม่ส่งออกมา (เช่น Gemini) ไม่ถูกนับ ค่าแนะนำจึงเผื่อไว้ 3 เท่า</div>
+            ${foot}
         </div>`;
 }
 
@@ -703,6 +733,14 @@ function buildSheet() {
         </div>`;
     root.querySelector('.mh-backdrop').addEventListener('click', () => { if (Date.now() - openedAt > 450) closeSheet(); });
     root.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+    root.addEventListener('change', e => {
+        const inp = e.target.closest?.('[data-think]');
+        if (!inp) return;
+        const v = Math.max(0, Math.min(200000, Math.round(Number(inp.value) || 0)));
+        settings().thinkAllow[inp.dataset.think] = v;
+        save();
+        renderSheet();
+    });
     // ปัดลงเพื่อปิด
     const panel = root.querySelector('.mh-sheet');
     let sy = null, dy = 0;
@@ -1255,7 +1293,7 @@ function wireEvents() {
         capture(p.type, p.dry || !!dryRun);
     });
     on('CHAT_CHANGED', () => { pending = null; clearTimeout(recalcTimer); recalcTimer = null; replyStats = null; loadForChat(); refresh(); });
-    for (const ev of ['MESSAGE_RECEIVED', 'MESSAGE_SWIPED', 'MESSAGE_DELETED', 'MESSAGE_UPDATED']) on(ev, () => { if (isSheetOpen()) scheduleReplyStats(); else replyStats = null; });
+    for (const ev of ['MESSAGE_RECEIVED', 'MESSAGE_SWIPED', 'MESSAGE_DELETED', 'MESSAGE_UPDATED', 'CHATCOMPLETION_MODEL_CHANGED', 'CHATCOMPLETION_SOURCE_CHANGED', 'CONNECTION_PROFILE_LOADED']) on(ev, () => { if (isSheetOpen()) scheduleReplyStats(); else replyStats = null; });
     for (const ev of ['MESSAGE_RECEIVED', 'MESSAGE_SENT', 'MESSAGE_DELETED', 'MESSAGE_UPDATED', 'MESSAGE_SWIPED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'MORE_MESSAGES_LOADED']) {
         on(ev, () => refresh());
     }
