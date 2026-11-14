@@ -11,7 +11,7 @@
 
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
-const VERSION = '0.1.0'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.1.1'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'style.css', 'manifest.json'];
 
@@ -387,18 +387,33 @@ function renderBadges(m) {
         const dot = '<i class="mh-dot"></i>';
         let text = '';
         if (!m.ready) text = size === 'mini' ? '' : '<span class="mh-txt mh-muted">รอวัด</span>';
-        else if (size === 'compact') text = texts.length ? `<span class="mh-txt">${texts.map(t => esc(t[0])).join('<b class="mh-sep">·</b>')}</span>` : '';
+        // แบบย่อแสดงแค่ 2 ช่องแรกที่มีค่า (ตามลำดับในตั้งค่า) ให้ป้ายสั้นพอวางในแถบพิมพ์
+        else if (size === 'compact') text = texts.length ? `<span class="mh-txt">${texts.slice(0, 2).map(t => esc(t[0])).join('<b class="mh-sep">·</b>')}</span>` : '';
         else if (size === 'full') text = texts.length ? `<span class="mh-txt mh-txt-full">${texts.map(t => `<span>${esc(t[1])}</span>`).join('')}</span>` : '';
-        const est = m.ready && m.est && size !== 'mini' ? '<span class="mh-est" title="ค่าประมาณ">≈</span>' : '';
 
         if (place === 'strip') {
-            el.innerHTML = `<span class="mh-strip-track">${segHTML(m)}</span>${size !== 'mini' && (text || est) ? `<span class="mh-strip-label">${dot}${est}${text}</span>` : ''}`;
+            el.innerHTML = `<span class="mh-strip-track">${segHTML(m)}</span>${size !== 'mini' && text ? `<span class="mh-strip-label">${dot}${text}</span>` : ''}`;
         } else {
-            el.innerHTML = `<span class="mh-glyph">${tl}${dot}</span>${est}${text}`;
+            el.innerHTML = `<span class="mh-glyph">${tl}${dot}</span>${text}`;
         }
-        const label = texts.map(t => t[1]).join(' · ') || (m.ready ? STATE_LABEL[m.state] : 'ยังไม่ได้วัด');
+        const label = (texts.map(t => t[1]).join(' · ') || (m.ready ? STATE_LABEL[m.state] : 'ยังไม่ได้วัด')) + (m.ready && m.est ? ' (ค่าประมาณ)' : '');
         el.setAttribute('aria-label', `Memory Horizon: ${label}`);
         el.title = `Memory Horizon — ${label}`;
+    }
+    fitSendBar();
+}
+
+/** ชิปในแถบพิมพ์: ถ้าช่องพิมพ์เหลือแคบเกินไป (จอมือถือ) ซ่อนข้อความ เหลือแต่ภาพ */
+const MIN_TEXTAREA = 150; // px
+function fitSendBar() {
+    const chips = ['send', 'left'].map(p => badges.get(p)).filter(el => el?.isConnected);
+    if (!chips.length) return;
+    const ta = document.getElementById('send_textarea');
+    for (const el of chips) el.classList.remove('mh-squeeze');
+    if (!ta) return;
+    for (const el of chips) {
+        if (ta.getBoundingClientRect().width >= MIN_TEXTAREA) break;
+        if (el.dataset.size !== 'mini') el.classList.add('mh-squeeze');
     }
 }
 
@@ -966,7 +981,7 @@ function wireEvents() {
 
     const chatEl = document.getElementById('chat');
     if (chatEl) new MutationObserver(scheduleMarker).observe(chatEl, { childList: true });
-    window.addEventListener('resize', placeFloat);
+    window.addEventListener('resize', () => { placeFloat(); fitSendBar(); });
     window.visualViewport?.addEventListener('resize', placeFloat);
     // ST หรือ extension อื่นสร้างแถบพิมพ์ใหม่ / Quick Dock คืนปุ่ม — เช็กทุก 3 วิ
     setInterval(() => { if (settings().enabled && [...badges.values()].some(b => !b.isConnected)) refresh(); }, 3000);
