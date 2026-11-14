@@ -76,6 +76,7 @@
 .mh-seg-empty { background: transparent; }
 
 .mh-g-chat { background: var(--mh-acc); }
+.mh-g-inject { background: color-mix(in oklab, var(--mh-acc) 45%, var(--mh-c-lore)); }
 .mh-g-card { background: var(--mh-c-card); }
 .mh-g-lore { background: var(--mh-c-lore); }
 .mh-g-persona { background: var(--mh-c-persona); }
@@ -368,8 +369,8 @@
     font-size: 42px;
     font-weight: 750;
     line-height: 1.3;
-    padding-top: .12em;
-    margin-top: -.12em;
+    padding-top: .35em;
+    margin-top: -.3em;
     letter-spacing: -.025em;
     font-variant-numeric: tabular-nums;
     background: linear-gradient(180deg, var(--mh-fg), color-mix(in oklab, var(--mh-fg) 70%, var(--mh-state)));
@@ -378,7 +379,8 @@
     color: transparent;
 }
 .mh-big span { font-size: 15px; font-weight: 600; letter-spacing: 0; margin-left: 8px; color: var(--mh-muted); -webkit-text-fill-color: var(--mh-muted); }
-.mh-big-text { font-size: 30px; letter-spacing: 0; }
+/* ข้อความไทย: ไม่ใช้ background-clip:text (ตัดวรรณยุกต์ที่ซ้อนสูง เช่น ทั้ง) — ใช้สีทึบแทน */
+.mh-big.mh-big-text { font-size: 30px; letter-spacing: 0; background: none; color: var(--mh-fg); -webkit-text-fill-color: currentColor; }
 .mh-hero-sub { color: var(--mh-muted); font-size: 13px; margin-top: 4px; }
 .mh-hero-sub b { color: var(--mh-fg); font-weight: 600; }
 

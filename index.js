@@ -11,7 +11,7 @@
 
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
-const VERSION = '0.2.1'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.2.2'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'style.css', 'manifest.json'];
 
@@ -62,11 +62,12 @@ const SIDES = Object.freeze({ left: 'ซ้าย', right: 'ขวา' });
 // กลุ่มของ identifier ใน Prompt Manager
 const GROUPS = [
     { key: 'chat', label: 'ประวัติแชท', ids: ['chatHistory', 'conversation'] },
+    { key: 'inject', label: 'ข้อความที่ extension แทรก', ids: ['__injected'] },
     { key: 'card', label: 'การ์ดตัวละคร', ids: ['charDescription', 'charPersonality', 'scenario'] },
     { key: 'lore', label: 'Lorebook', ids: ['worldInfoBefore', 'worldInfoAfter'] },
     { key: 'persona', label: 'เพอร์โซนา', ids: ['personaDescription'] },
     { key: 'examples', label: 'ตัวอย่างบทสนทนา', ids: ['dialogueExamples', 'examples'] },
-    { key: 'preset', label: 'Preset', ids: ['main', 'nsfw', 'jailbreak', 'enhanceDefinitions', 'impersonate', 'bias', 'nudge', 'start_chat', 'prompt', 'quietPrompt', 'groupNudge'] },
+    { key: 'preset', label: 'Preset', ids: ['main', 'nsfw', 'jailbreak', 'enhanceDefinitions', 'impersonate', 'bias', 'nudge', 'start_chat', 'prompt', 'quietPrompt', 'groupNudge', 'newMainChat', 'continueNudge', 'emptyUserMessageReplacement'] },
     { key: 'ext', label: 'ส่วนเสริม / อื่น ๆ', ids: [] },
 ];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -176,12 +177,46 @@ function readTokens() {
     const reserve = Number(oai.oai_settings.openai_max_tokens) || 0;
     const total = Object.values(counts).reduce((a, v) => a + (Number(v) || 0), 0);
     if (!max || !total) return null;
+    splitChatHistory(counts);
     return { counts, total, max, reserve, budget: Math.max(1, max - reserve) };
 }
+
+/**
+ * ก้อน chatHistory ของ ST รวมข้อความที่ extension แทรกตามความลึก (role system) และ [Start a new chat]
+ * ไว้ด้วย — แยกออกมา ให้ "ประวัติแชท" เหลือแต่ข้อความแชทจริง (user/assistant/tool)
+ */
+function splitChatHistory(counts) {
+    const orig = Number(counts.chatHistory) || 0;
+    const hist = oai?.promptManager?.messages?.collection?.find?.(x => x?.identifier === 'chatHistory');
+    if (!orig || !Array.isArray(hist?.collection)) return;
+    let chat = 0, sys = 0;
+    const walk = col => {
+        for (const it of col.collection) {
+            if (!it) continue;
+            if (Array.isArray(it.collection)) { walk(it); continue; }
+            const tok = Number(it.tokens) || 0;
+            const id = String(it.identifier ?? '');
+            if (['newMainChat', 'groupNudge', 'emptyUserMessageReplacement'].includes(id)) sys += tok;
+            else if (it.role === 'user' || it.role === 'assistant' || it.role === 'tool') chat += tok;
+        }
+    };
+    walk(hist);
+    if (chat + sys > orig) return; // ตัวเลขไม่ลงกัน — คงก้อนเดิมไว้
+    counts.chatHistory = chat;
+    if (sys) counts.newMainChat = (Number(counts.newMainChat) || 0) + sys;
+    if (orig - chat - sys > 0) counts.__injected = orig - chat - sys;
+}
+
+let userDryRun = false; // กด "วัดตอนนี้" เอง
 
 function capture(type, dry) {
     const c = ctx();
     if (!c.chatId || !Array.isArray(c.chat)) return;
+    // รอบจำลองที่ ST/extension สั่งเอง ไม่ทับค่าจากรอบที่ส่งจริงของแชทเดียวกันที่ยังไม่มีข้อความเพิ่ม
+    if (dry && !userDryRun && meas && !meas.est && meas.chatId === c.chatId && meas.len === c.chat.length) {
+        diag(`skip dry run: real measurement still current`);
+        return;
+    }
     const n = includedCount(type, dry);
     if (n === null && !readTokens()) return;
     const chat = c.chat;
@@ -572,6 +607,7 @@ function buildSheet() {
         if (act === 'jump') jumpToHorizon();
         if (act === 'measure') measureNow();
         if (act === 'settings') openSettingsDrawer();
+        if (act === 'lorelens') { closeSheet(); try { globalThis.LoreLens.open('tok'); } catch (err) { reportError('เปิด Lore Lens ไม่สำเร็จ', err); } }
     });
     document.body.append(root);
     return root;
@@ -685,6 +721,7 @@ function renderSheet() {
         <div class="mh-actions">
             ${!m.all ? '<button class="mh-btn" data-act="jump"><i class="fa-solid fa-location-crosshairs"></i> ไปที่ขอบความจำ</button>' : ''}
             <button class="mh-btn" data-act="measure"><i class="fa-solid fa-rotate"></i> วัดตอนนี้</button>
+            ${typeof globalThis.LoreLens?.open === 'function' ? '<button class="mh-btn" data-act="lorelens" title="ดูว่าแต่ละ extension / lorebook entry กินเท่าไหร่ใน Lore Lens"><i class="fa-solid fa-magnifying-glass-chart"></i> ละเอียดใน Lore Lens</button>' : ''}
             <button class="mh-btn mh-btn-icon" data-act="settings" title="ตั้งค่า" aria-label="ตั้งค่า"><i class="fa-solid fa-sliders"></i></button>
         </div>
         <div class="mh-meta">${m.est ? '≈ ' : ''}${src}${when ? ` · ${when}` : ''}</div>`;
@@ -724,10 +761,12 @@ async function measureNow() {
     if (typeof c.generate !== 'function') { toastr.warning('ST รุ่นนี้ยังจำลองพรอมท์จาก extension ไม่ได้ — ส่งข้อความหนึ่งครั้งแทน'); return; }
     try {
         sheet?.querySelector('[data-act="measure"]')?.classList.add('mh-busy');
+        userDryRun = true;
         await c.generate('normal', {}, true);
     } catch (err) {
         reportError('จำลองพรอมท์ไม่สำเร็จ', err);
     } finally {
+        userDryRun = false;
         sheet?.querySelector('[data-act="measure"]')?.classList.remove('mh-busy');
         renderSheet();
     }
