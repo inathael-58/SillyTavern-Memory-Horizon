@@ -11,7 +11,7 @@
 
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
-const VERSION = '0.3.1'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.3.2'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'style.css', 'manifest.json'];
 
@@ -604,6 +604,88 @@ function applyMarker() {
     }
 }
 
+// ───────────────────────── reply usage ─────────────────────────
+// คำตอบจริงของ AI ใช้ token ไปเท่าไหร่ เทียบกับที่กันไว้ตอบ (Max Response Length)
+
+const REPLY_WINDOW = 10;           // ดูคำตอบล่าสุดกี่อัน
+const replyTokCache = new Map();
+let replyStats = null;             // { chatId, last, max, maxIdx, n }
+let replyTimer = null;
+
+async function countTok(text) {
+    const t = String(text ?? '');
+    if (!t) return 0;
+    try { return Number(await ctx().getTokenCountAsync(t)) || 0; } catch { return Math.ceil(t.length / 3); }
+}
+
+function scheduleReplyStats() {
+    clearTimeout(replyTimer);
+    replyTimer = setTimeout(() => { computeReplyStats().then(renderSheet).catch(err => diag(`reply stats: ${err?.message ?? err}`)); }, 300);
+}
+
+async function computeReplyStats() {
+    const c = ctx();
+    const chat = Array.isArray(c.chat) ? c.chat : [];
+    const picks = [];
+    for (let i = chat.length - 1; i >= 0 && picks.length < REPLY_WINDOW; i--) {
+        const m = chat[i];
+        if (!m || m.is_user || m.is_system || (!m.mes && !m.extra?.reasoning)) continue;
+        picks.push(i);
+    }
+    if (!picks.length) { replyStats = null; return; }
+    const items = [];
+    for (const i of picks) {
+        const m = chat[i];
+        const reasoning = String(m.extra?.reasoning ?? '');
+        const key = `${c.chatId}|${i}|${m.swipe_id ?? 0}|${String(m.mes ?? '').length}|${reasoning.length}`;
+        let v = replyTokCache.get(key);
+        if (!v) {
+            const reason = await countTok(reasoning);
+            // ST เก็บ token_count = ความคิดที่แสดง + ข้อความ (ถ้าเปิดตัวนับ token ของข้อความไว้)
+            const stored = Number(m.extra?.token_count) || 0;
+            const total = stored || (await countTok(m.mes)) + reason;
+            v = { total, reason: Math.min(reason, total) };
+            if (replyTokCache.size > 400) replyTokCache.clear();
+            replyTokCache.set(key, v);
+        }
+        items.push({ idx: i, ...v });
+    }
+    const top = items.reduce((a, b) => (b.total > a.total ? b : a));
+    replyStats = { chatId: c.chatId, last: items[0], max: top.total, maxIdx: top.idx, n: items.length };
+}
+
+/** ค่า Max Response Length ที่แนะนำ: 3 เท่าของคำตอบยาวสุด (เผื่อความคิดที่มองไม่เห็น) ไม่ต่ำกว่า 16,000 */
+const suggestReserve = maxUsed => Math.max(16000, Math.ceil((maxUsed * 3) / 1000) * 1000);
+
+function replyCardHTML(m) {
+    const r = replyStats;
+    if (!m.tk || !r || r.chatId !== ctx().chatId) return '';
+    const reserve = m.tk.reserve;
+    if (!reserve) return '';
+    const w = v => `${Math.max(0.6, Math.min(100, (v / reserve) * 100)).toFixed(2)}%`;
+    const sug = suggestReserve(r.max);
+    let advice = '';
+    if (r.max > reserve * 0.85) {
+        advice = `<div class="mh-reason mh-reason-watch"><i class="fa-solid fa-triangle-exclamation"></i><div><b>คำตอบเกือบชนเพดานที่กันไว้</b><small>คำตอบยาว ๆ อาจถูกตัดกลางประโยค ลองเพิ่ม Max Response Length</small></div></div>`;
+    } else if (reserve >= sug * 1.5) {
+        advice = `<div class="mh-reason mh-reason-ok"><i class="fa-solid fa-lightbulb"></i><div><b>ใช้จริงไม่ถึง ${pct(r.max / reserve)} ของที่กันไว้</b><small>ลด Max Response Length เหลือราว ${fmt(sug)} จะได้งบพรอมท์เพิ่ม ${fmt(reserve - sug)} token ให้ AI จำแชทได้มากขึ้น · ถ้าคำตอบเริ่มขาดกลางประโยคหรือว่างเปล่า ให้ขยับขึ้น</small></div></div>`;
+    }
+    return `
+        <div class="mh-card mh-reply">
+            <div class="mh-card-title">ที่กันไว้ให้ AI ตอบ <span class="mh-muted">${fmt(reserve)}</span></div>
+            <div class="mh-reply-bar">
+                <i class="mh-reply-max" style="width:${w(r.max)}"></i>
+                <i class="mh-reply-last" style="width:${w(r.last.total)}"></i>
+            </div>
+            <div class="mh-rows">
+                <div class="mh-row"><i class="mh-sw mh-reply-last"></i><span class="mh-row-l">คำตอบล่าสุด · #${r.last.idx}${r.last.reason ? ` <small class="mh-muted">(ความคิดที่แสดง ${fmt(r.last.reason)})</small>` : ''}</span><span class="mh-row-v">${fmt(r.last.total)}</span><span class="mh-row-p">${pct(r.last.total / reserve)}</span></div>
+                <div class="mh-row"><i class="mh-sw mh-reply-max"></i><span class="mh-row-l">ยาวสุดใน ${r.n} คำตอบล่าสุด · #${r.maxIdx}</span><span class="mh-row-v">${fmt(r.max)}</span><span class="mh-row-p">${pct(r.max / reserve)}</span></div>
+            </div>
+            ${advice ? `<div class="mh-status mh-reply-advice">${advice}</div>` : ''}
+            <div class="mh-foot">นับข้อความคำตอบและความคิดที่ ST เก็บไว้ · ความคิดภายในที่โมเดลไม่ส่งออกมา (เช่น Gemini) ไม่ถูกนับ ค่าแนะนำจึงเผื่อไว้ 3 เท่า</div>
+        </div>`;
+}
+
 // ───────────────────────── detail sheet ─────────────────────────
 
 let sheet = null;
@@ -669,6 +751,7 @@ function openSheet() {
     sheet.classList.add('mh-open');
     document.body.classList.add('mh-sheet-open');
     try { renderSheet(); } catch (err) { reportError('แสดงรายละเอียดไม่สำเร็จ', err); }
+    scheduleReplyStats();
     sheet.querySelector('.mh-close')?.focus({ preventScroll: true });
 }
 
@@ -765,7 +848,7 @@ function renderSheet() {
     const when = m.at ? new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
     const src = m.est ? (m.at ? 'ประมาณจากการจำลอง' : 'ประมาณจากข้อมูลเดิมของแชท') : 'จากรอบที่ส่งจริง';
 
-    body.innerHTML = `${head}${hero}${timeline}${budget}${status}
+    body.innerHTML = `${head}${hero}${timeline}${budget}${replyCardHTML(m)}${status}
         <div class="mh-actions">
             ${!m.all ? '<button class="mh-btn" data-act="jump"><i class="fa-solid fa-location-crosshairs"></i> ไปที่ขอบความจำ</button>' : ''}
             <button class="mh-btn" data-act="measure"><i class="fa-solid fa-rotate"></i> วัดตอนนี้</button>
@@ -1171,7 +1254,8 @@ function wireEvents() {
         if (!settings().enabled) return;
         capture(p.type, p.dry || !!dryRun);
     });
-    on('CHAT_CHANGED', () => { pending = null; clearTimeout(recalcTimer); recalcTimer = null; loadForChat(); refresh(); });
+    on('CHAT_CHANGED', () => { pending = null; clearTimeout(recalcTimer); recalcTimer = null; replyStats = null; loadForChat(); refresh(); });
+    for (const ev of ['MESSAGE_RECEIVED', 'MESSAGE_SWIPED', 'MESSAGE_DELETED', 'MESSAGE_UPDATED']) on(ev, () => { if (isSheetOpen()) scheduleReplyStats(); else replyStats = null; });
     for (const ev of ['MESSAGE_RECEIVED', 'MESSAGE_SENT', 'MESSAGE_DELETED', 'MESSAGE_UPDATED', 'MESSAGE_SWIPED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'MORE_MESSAGES_LOADED']) {
         on(ev, () => refresh());
     }
