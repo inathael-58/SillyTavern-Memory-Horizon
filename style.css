@@ -131,12 +131,13 @@
     50% { box-shadow: 0 0 0 5px color-mix(in oklab, var(--mh-state) 0%, transparent); }
 }
 
-.mh-txt { display: inline-flex; align-items: center; gap: 0; }
+.mh-txt { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .mh-sep { font-weight: 400; margin: 0 5px; color: var(--mh-muted); }
 .mh-txt-full { flex-direction: column; align-items: flex-start; gap: 1px; font-size: 11.5px; }
 .mh-txt-full > span + span { color: var(--mh-muted); }
 .mh-muted { color: var(--mh-muted); }
-.mh-est { color: var(--mh-muted); font-weight: 600; margin-right: -2px; }
+/* ค่าประมาณ (จากรอบจำลอง): จุดสถานะเป็นวงกลวง */
+.mh-badge[data-est="1"] .mh-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--mh-state); }
 
 /* ชิปในแถบพิมพ์ */
 .mh-at-send, .mh-at-left {
@@ -153,6 +154,41 @@
 .mh-at-send[data-size="full"], .mh-at-left[data-size="full"] { height: auto; min-height: 30px; padding: 3px 11px 3px 8px; border-radius: 12px; }
 .mh-at-send:hover, .mh-at-left:hover { background: color-mix(in oklab, var(--mh-state) 16%, transparent); }
 .mh-at-send:active, .mh-at-left:active { transform: scale(.96); }
+
+/* ST บังคับทุก div ในแถบพิมพ์ให้เป็นปุ่มไอคอน (กว้างคงที่ ตัวอักษร ~1.9 เท่า)
+   และธีมบางตัวก็ใส่ขนาด/สีตัวอักษรเพิ่ม — ตรงนี้ล็อกขนาดของเราไว้ไม่ให้ถูกดึงไป */
+#send_form #leftSendForm > .mh-badge,
+#send_form #rightSendForm > .mh-badge {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: min(44vw, 240px);
+    height: 26px !important;
+    margin: auto 3px !important;
+    padding: 0 9px 0 7px !important;
+    flex: 0 1 auto;
+    align-self: center;
+    order: 0;
+    overflow: hidden;
+    opacity: .9;
+    filter: none !important;
+    color: var(--mh-fg) !important;
+    font-size: 11.5px !important;
+    font-weight: 500 !important;
+    line-height: 1.2 !important;
+    letter-spacing: 0 !important;
+    text-shadow: none !important;
+}
+#send_form #leftSendForm > .mh-badge[data-size="mini"],
+#send_form #rightSendForm > .mh-badge[data-size="mini"] { padding: 0 7px !important; }
+#send_form #leftSendForm > .mh-badge[data-size="full"],
+#send_form #rightSendForm > .mh-badge[data-size="full"] { height: auto !important; min-height: 26px; padding: 2px 10px 2px 7px !important; border-radius: 10px; }
+#send_form .mh-badge .mh-txt-full { font-size: 10.5px !important; line-height: 1.25 !important; }
+#send_form .mh-badge:hover { opacity: 1; }
+#send_form .mh-badge.mh-squeeze .mh-txt { display: none; }
+#send_form #leftSendForm > .mh-badge.mh-squeeze, #send_form #rightSendForm > .mh-badge.mh-squeeze { padding: 0 7px !important; height: 26px !important; }
+#send_form > .mh-at-strip { font-size: 11px !important; line-height: 1.2 !important; }
+#send_form .mh-badge .mh-txt, #send_form .mh-badge .mh-sep { font-size: inherit !important; color: inherit !important; }
+#send_form .mh-badge .mh-txt-full > span + span { color: var(--mh-muted) !important; }
 
 /* หัวแชท */
 .mh-at-top {
