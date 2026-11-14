@@ -11,7 +11,7 @@
 
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
-const VERSION = '0.3.3'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.3.4'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'style.css', 'manifest.json'];
 
@@ -246,9 +246,17 @@ function capture(type, dry) {
         else { idx = a.oldest; all = idx <= (list[0] ?? 0); }
         if (!a.matched) diag('chat history matched by role only (prompt text differs from chat)');
     } else {
-        let n = stIncludedCount(dry);
+        // ไม่มีโครงสร้าง Prompt Manager ให้อ่าน: ใช้ตัวนับของ ST เอง (Chat Completion) หรือขอบที่ ST จดไว้ (Text Completion)
+        let n = null;
+        if (c.mainApi === 'openai' && Number.isFinite(oai?.openai_messages_count)) {
+            n = oai.openai_messages_count;
+            if (type === 'swipe' || type === 'regenerate' || type === 'continue') n++;
+        } else {
+            n = stIncludedCount(dry);
+        }
         if (n === null && !tokens) return;
-        idx = meas?.idx ?? 0; all = meas?.all ?? true; sent = n ?? meas?.sent ?? 0;
+        // ไม่รู้จำนวน = ไม่รู้ (null) ไม่ใช่ 0 — ไม่งั้นจะขึ้น "ไม่มีข้อความแชทถูกส่งไปเลย" ผิด ๆ
+        idx = meas?.idx ?? 0; all = meas?.all ?? true; sent = n ?? meas?.sent ?? null;
         if (n !== null) {
             all = n >= list.length;
             idx = all ? (list[0] ?? 0) : list[list.length - n];
@@ -785,6 +793,7 @@ function openSheet() {
         return;
     }
     diag('open sheet');
+    applySurface();
     openedAt = Date.now();
     sheet.classList.add('mh-open');
     document.body.classList.add('mh-sheet-open');
@@ -1032,6 +1041,38 @@ function maybeAlert(m) {
         }
     }
     lastAlert.level = m.level;
+}
+
+/**
+ * พื้นทึบของป้าย/หน้ารายละเอียด: อ่านสี UI Background ของธีม (มักโปร่งใส) แล้วทำให้ทึบเอง
+ * ไม่พึ่ง CSS relative color ซึ่ง Safari บางรุ่นคำนวณไม่ได้ ทำให้พื้นโปร่งจนเห็นแชทด้านหลัง
+ */
+let surfaceKey = '';
+function parseColor(str) {
+    const t = String(str || '');
+    let m = t.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+)(%?))?/);
+    if (m) return [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : (m[5] ? +m[4] / 100 : +m[4])];
+    m = t.match(/color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?/);
+    if (m) return [m[1] * 255, m[2] * 255, m[3] * 255, m[4] === undefined ? 1 : +m[4]];
+    return null;
+}
+function applySurface() {
+    try {
+        const probe = document.createElement('div');
+        probe.style.cssText = 'position:absolute;width:0;height:0;visibility:hidden;pointer-events:none;color:var(--SmartThemeBlurTintColor);background-color:var(--SmartThemeChatTintColor)';
+        document.body.append(probe);
+        const cs = getComputedStyle(probe);
+        const tint = parseColor(cs.color);
+        const chat = parseColor(cs.backgroundColor);
+        probe.remove();
+        // สีพื้นที่โปร่งเกือบหมด (alpha ต่ำมาก) มักไม่มีความหมายของสีจริง — ใช้สีพื้นแชทแทน
+        const pick = tint && tint[3] >= 0.08 ? tint : chat && chat[3] >= 0.08 ? chat : tint;
+        if (!pick) return;
+        const value = `rgba(${pick.slice(0, 3).map(v => Math.round(v)).join(', ')}, 0.97)`;
+        if (value === surfaceKey) return;
+        surfaceKey = value;
+        document.documentElement.style.setProperty('--mh-surface-solid', value);
+    } catch (err) { diag(`surface: ${err?.message ?? err}`); }
 }
 
 function applyAccent() {
@@ -1297,7 +1338,12 @@ function wireEvents() {
     for (const ev of ['MESSAGE_RECEIVED', 'MESSAGE_SENT', 'MESSAGE_DELETED', 'MESSAGE_UPDATED', 'MESSAGE_SWIPED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'MORE_MESSAGES_LOADED']) {
         on(ev, () => refresh());
     }
-    on('SETTINGS_UPDATED', () => refresh());
+    on('SETTINGS_UPDATED', () => { applySurface(); refresh(); });
+    // เปลี่ยนธีม (เช่น ตามเวลากลางวัน/กลางคืน) — ST ตั้งตัวแปรสีบน <html>/<body> ใหม่
+    let surfTimer = null;
+    const surfObs = new MutationObserver(() => { clearTimeout(surfTimer); surfTimer = setTimeout(applySurface, 300); });
+    surfObs.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+    surfObs.observe(document.body, { attributes: true, attributeFilter: ['style', 'class'] });
 
     const chatEl = document.getElementById('chat');
     if (chatEl) new MutationObserver(scheduleMarker).observe(chatEl, { childList: true });
@@ -1325,6 +1371,7 @@ jQuery(async () => {
         }
         settings();
         applyAccent();
+        applySurface();
         mountDrawer();
         addWandItem();
         registerCommands();
