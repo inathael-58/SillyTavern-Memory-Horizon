@@ -1,0 +1,556 @@
+/* Memory Horizon — ทุกสีอ้างตัวแปรธีมของ SillyTavern แล้วผสมด้วย color-mix()
+   เปลี่ยนธีม (มืด/สว่าง) แล้วสีเปลี่ยนตามเองทันที ไม่มีสีฝังตายตัว ยกเว้นเฉดเหลือง/แดง
+   ที่ผสมกับสีตัวอักษรของธีม เพื่อให้อ่านออกทั้งพื้นมืดและพื้นสว่าง */
+
+:root {
+    --mh-accent: var(--SmartThemeQuoteColor);
+}
+
+.mh-badge,
+#mh_sheet,
+.mh-settings,
+#chat .mes.mh-horizon {
+    --mh-fg: var(--SmartThemeBodyColor, #dcdcd2);
+    --mh-acc: var(--mh-accent, var(--SmartThemeQuoteColor, #e18a24));
+    --mh-muted: color-mix(in oklab, var(--mh-fg) 62%, transparent);
+    --mh-faint: color-mix(in oklab, var(--mh-fg) 13%, transparent);
+    --mh-soft: color-mix(in oklab, var(--mh-fg) 6%, transparent);
+    --mh-line: color-mix(in oklab, var(--SmartThemeBorderColor, #777) 75%, transparent);
+    --mh-tint: var(--SmartThemeBlurTintColor, rgba(24, 24, 30, .9));
+    --mh-surface: var(--mh-tint);
+    --mh-shadow: var(--SmartThemeShadowColor, rgba(0, 0, 0, .5));
+    --mh-watch: color-mix(in oklab, #f6a623 74%, var(--mh-fg));
+    --mh-over: color-mix(in oklab, #f2495c 74%, var(--mh-fg));
+    --mh-state: var(--mh-acc);
+
+    /* สีของแต่ละกลุ่มใน "อะไรกิน context" — fallback ใช้สีธีมตรง ๆ */
+    --mh-c-card: var(--SmartThemeEmColor, #9fc);
+    --mh-c-lore: var(--SmartThemeUnderlineColor, #8cf);
+    --mh-c-persona: color-mix(in oklab, var(--mh-acc) 50%, var(--SmartThemeEmColor, #9fc));
+    --mh-c-examples: color-mix(in oklab, var(--SmartThemeUnderlineColor, #8cf) 50%, var(--mh-fg));
+    --mh-c-preset: color-mix(in oklab, var(--mh-fg) 55%, transparent);
+    --mh-c-ext: color-mix(in oklab, var(--SmartThemeBorderColor, #777) 90%, var(--mh-fg));
+}
+
+/* พื้นทึบจากสีพื้นของธีม (ตัดความโปร่งใสออก) + เฉดกลุ่มที่หมุน hue จากสีเน้น */
+@supports (color: rgb(from red r g b / 1)) {
+    .mh-badge, #mh_sheet, .mh-settings, #chat .mes.mh-horizon {
+        --mh-surface: rgb(from var(--mh-tint) r g b / .96);
+    }
+}
+@supports (color: oklch(from red l c h)) {
+    .mh-badge, #mh_sheet, .mh-settings, #chat .mes.mh-horizon {
+        --mh-c-card: oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .1) calc(h + 60));
+        --mh-c-lore: oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .1) calc(h + 140));
+        --mh-c-persona: oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .09) calc(h + 200));
+        --mh-c-examples: oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .08) calc(h + 260));
+        --mh-c-preset: oklch(from var(--mh-acc) clamp(.5, l, .75) calc(max(c, .06) * .45) calc(h + 300));
+    }
+}
+
+.mh-badge.mh-state-watch, #mh_sheet[data-state="watch"] { --mh-state: var(--mh-watch); }
+.mh-badge.mh-state-over, #mh_sheet[data-state="over"] { --mh-state: var(--mh-over); }
+.mh-badge.mh-state-idle, #mh_sheet[data-state="idle"] { --mh-state: var(--mh-muted); }
+
+/* ───────── ไทม์ไลน์ (ใช้ทั้งในป้ายและหน้ารายละเอียด) ───────── */
+
+.mh-tl, .mh-tl-big, .mh-strip-track, .mh-stack {
+    display: flex;
+    overflow: hidden;
+    background: var(--mh-faint);
+}
+.mh-seg { display: block; flex: 0 0 auto; min-width: 0; height: 100%; transition: flex-basis .45s cubic-bezier(.3, .7, .2, 1); }
+.mh-seg + .mh-seg, .mh-stack > i + i { box-shadow: -1px 0 0 color-mix(in oklab, var(--mh-surface) 70%, transparent); }
+.mh-seg-mem { background: linear-gradient(90deg, color-mix(in oklab, var(--mh-acc) 72%, transparent), var(--mh-acc)); }
+.mh-seg-fixed { background: color-mix(in oklab, var(--mh-acc) 38%, var(--mh-faint)); }
+.mh-seg-gone { background: color-mix(in oklab, var(--mh-fg) 20%, transparent); }
+.mh-seg-lost {
+    background: repeating-linear-gradient(90deg, var(--mh-watch) 0 4px, color-mix(in oklab, var(--mh-watch) 45%, transparent) 4px 6px);
+}
+.mh-seg-sum {
+    background:
+        repeating-linear-gradient(135deg, color-mix(in oklab, var(--mh-fg) 32%, transparent) 0 2px, transparent 2px 5px),
+        color-mix(in oklab, var(--mh-fg) 10%, transparent);
+}
+.mh-seg-room { background: var(--mh-faint); }
+.mh-seg-empty { background: transparent; }
+
+.mh-g-chat { background: var(--mh-acc); }
+.mh-g-card { background: var(--mh-c-card); }
+.mh-g-lore { background: var(--mh-c-lore); }
+.mh-g-persona { background: var(--mh-c-persona); }
+.mh-g-examples { background: var(--mh-c-examples); }
+.mh-g-preset { background: var(--mh-c-preset); }
+.mh-g-ext { background: var(--mh-c-ext); }
+
+/* ───────── ป้าย ───────── */
+
+.mh-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    box-sizing: border-box;
+    color: var(--mh-fg);
+    font-size: 12px;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    white-space: nowrap;
+    outline: none;
+}
+.mh-badge:focus-visible { box-shadow: 0 0 0 2px var(--mh-acc); }
+
+.mh-glyph {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+}
+.mh-tl {
+    width: 24px;
+    height: 6px;
+    border-radius: 3px;
+}
+.mh-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--mh-state);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--mh-state) 22%, transparent);
+    transition: background .3s, box-shadow .3s;
+}
+.mh-glyph .mh-dot { margin-left: 5px; }
+.mh-state-over .mh-dot { animation: mh-pulse 1.8s ease-in-out infinite; }
+@keyframes mh-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px color-mix(in oklab, var(--mh-state) 25%, transparent); }
+    50% { box-shadow: 0 0 0 5px color-mix(in oklab, var(--mh-state) 0%, transparent); }
+}
+
+.mh-txt { display: inline-flex; align-items: center; gap: 0; }
+.mh-sep { font-weight: 400; margin: 0 5px; color: var(--mh-muted); }
+.mh-txt-full { flex-direction: column; align-items: flex-start; gap: 1px; font-size: 11.5px; }
+.mh-txt-full > span + span { color: var(--mh-muted); }
+.mh-muted { color: var(--mh-muted); }
+.mh-est { color: var(--mh-muted); font-weight: 600; margin-right: -2px; }
+
+/* ชิปในแถบพิมพ์ */
+.mh-at-send, .mh-at-left {
+    align-self: center;
+    height: 28px;
+    padding: 0 9px 0 7px;
+    margin: 0 4px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in oklab, var(--mh-state) 30%, var(--mh-line));
+    background: color-mix(in oklab, var(--mh-state) 9%, transparent);
+    transition: background .2s, border-color .3s, transform .15s;
+}
+.mh-at-send[data-size="mini"], .mh-at-left[data-size="mini"] { padding: 0 8px; }
+.mh-at-send[data-size="full"], .mh-at-left[data-size="full"] { height: auto; min-height: 30px; padding: 3px 11px 3px 8px; border-radius: 12px; }
+.mh-at-send:hover, .mh-at-left:hover { background: color-mix(in oklab, var(--mh-state) 16%, transparent); }
+.mh-at-send:active, .mh-at-left:active { transform: scale(.96); }
+
+/* หัวแชท */
+.mh-at-top {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    height: 28px;
+    padding: 0 12px 0 9px;
+    border-radius: 999px;
+    border: 1px solid var(--mh-line);
+    background: color-mix(in oklab, var(--mh-surface) 88%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 4px 16px -6px var(--mh-shadow);
+    opacity: .9;
+    transition: opacity .2s;
+}
+.mh-at-top:hover { opacity: 1; }
+.mh-at-top[data-size="full"] { height: auto; padding: 5px 14px 5px 10px; border-radius: 14px; }
+
+/* ปุ่มลอย */
+#mh_float {
+    position: fixed;
+    z-index: 3010;
+    height: 30px;
+    padding: 0 11px 0 9px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in oklab, var(--mh-state) 35%, var(--mh-line));
+    background: var(--mh-surface);
+    box-shadow: 0 6px 20px -8px var(--mh-shadow), 0 0 0 4px color-mix(in oklab, var(--mh-state) 8%, transparent);
+    touch-action: none;
+}
+#mh_float[data-size="mini"] { padding: 0 9px; }
+#mh_float[data-size="full"] { height: auto; padding: 6px 13px 6px 10px; border-radius: 14px; }
+#mh_float.mh-dragging { cursor: grabbing; box-shadow: 0 14px 30px -10px var(--mh-shadow); transform: scale(1.04); }
+#mh_float.mh-snapping { transition: left .25s cubic-bezier(.3, .7, .2, 1), top .25s cubic-bezier(.3, .7, .2, 1); }
+/* อยู่ในถาด Quick Dock: ให้ดูเป็นปุ่มของถาด */
+#mh_float:not(body > #mh_float) { position: static; box-shadow: none; }
+
+/* เส้นบนช่องพิมพ์ */
+.mh-at-strip {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: -8px;
+    height: 12px;
+    display: flex;
+    align-items: center;
+    z-index: 5;
+    gap: 0;
+}
+.mh-strip-track {
+    flex: 1;
+    height: 3px;
+    border-radius: 3px;
+    transition: height .15s;
+}
+.mh-at-strip:hover .mh-strip-track, .mh-at-strip:focus-visible .mh-strip-track { height: 5px; }
+.mh-strip-label {
+    position: absolute;
+    right: 0;
+    bottom: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 9px 2px 7px;
+    border-radius: 999px 999px 4px 999px;
+    border: 1px solid var(--mh-line);
+    background: var(--mh-surface);
+    font-size: 11px;
+    box-shadow: 0 3px 10px -6px var(--mh-shadow);
+}
+.mh-strip-label .mh-txt-full { flex-direction: row; gap: 8px; }
+
+/* ───────── หน้ารายละเอียด ───────── */
+
+#mh_sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 2147483646;
+    visibility: hidden;
+    pointer-events: none;
+    color: var(--mh-fg);
+    font-size: 14px;
+}
+#mh_sheet.mh-open { visibility: visible; pointer-events: auto; }
+#mh_sheet .mh-backdrop {
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 100%;
+    background: color-mix(in oklab, var(--mh-shadow) 70%, transparent);
+    opacity: 0;
+    transition: opacity .25s;
+}
+#mh_sheet.mh-open .mh-backdrop { opacity: 1; }
+
+#mh_sheet .mh-sheet {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 88vh;
+    max-height: 88dvh;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    background: var(--mh-surface);
+    background-image: radial-gradient(120% 60% at 50% -10%, color-mix(in oklab, var(--mh-state) 16%, transparent), transparent 70%);
+    border: 1px solid var(--mh-line);
+    border-bottom: 0;
+    border-radius: 22px 22px 0 0;
+    box-shadow: 0 -18px 50px -20px var(--mh-shadow);
+    backdrop-filter: blur(18px) saturate(1.2);
+    -webkit-backdrop-filter: blur(18px) saturate(1.2);
+    transform: translateY(104%);
+    transition: transform .34s cubic-bezier(.2, .8, .2, 1);
+    padding-bottom: env(safe-area-inset-bottom);
+}
+#mh_sheet.mh-open .mh-sheet { transform: translateY(0); }
+
+@media (min-width: 720px) {
+    #mh_sheet .mh-sheet {
+        left: 50%;
+        right: auto;
+        bottom: auto;
+        top: 50%;
+        width: 460px;
+        max-height: min(80vh, 760px);
+        border-bottom: 1px solid var(--mh-line);
+        border-radius: 22px;
+        box-shadow: 0 30px 80px -24px var(--mh-shadow);
+        transform: translate(-50%, -46%) scale(.97);
+        opacity: 0;
+        transition: transform .28s cubic-bezier(.2, .8, .2, 1), opacity .2s;
+    }
+    #mh_sheet.mh-open .mh-sheet { transform: translate(-50%, -50%); opacity: 1; }
+    #mh_sheet .mh-grab { display: none; }
+}
+
+.mh-grab { display: flex; justify-content: center; padding: 8px 0 2px; cursor: grab; touch-action: none; }
+.mh-grab i { width: 38px; height: 4px; border-radius: 4px; background: var(--mh-faint); }
+
+.mh-sheet-body {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px 18px 18px;
+    -webkit-overflow-scrolling: touch;
+}
+
+.mh-head { display: flex; align-items: center; gap: 10px; padding: 6px 0 10px; touch-action: none; }
+.mh-logo { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 11px; background: color-mix(in oklab, var(--mh-state) 14%, transparent); }
+.mh-logo svg { width: 26px; height: 26px; }
+.mh-logo-sun { fill: var(--mh-state); }
+.mh-logo-ray { stroke: var(--mh-state); stroke-width: 1.8; opacity: .75; }
+.mh-logo-line { stroke: var(--mh-fg); stroke-width: 2; }
+.mh-logo-fade { stroke: var(--mh-muted); stroke-width: 1.6; opacity: .6; }
+.mh-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.mh-title b { font-size: 15px; letter-spacing: .01em; }
+.mh-title small { color: var(--mh-muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.mh-pill {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 999px;
+    color: var(--mh-state);
+    background: color-mix(in oklab, var(--mh-state) 14%, transparent);
+    border: 1px solid color-mix(in oklab, var(--mh-state) 35%, transparent);
+}
+.mh-pill-ok { --mh-state: var(--mh-acc); }
+.mh-pill-watch { --mh-state: var(--mh-watch); }
+.mh-pill-over { --mh-state: var(--mh-over); }
+.mh-pill-idle { --mh-state: var(--mh-muted); }
+
+.mh-close {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--mh-line);
+    background: var(--mh-soft);
+    color: var(--mh-fg);
+    display: grid; place-items: center;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+.mh-close:hover { background: var(--mh-faint); }
+
+.mh-hero { padding: 4px 2px 6px; }
+.mh-big {
+    font-size: 46px;
+    font-weight: 750;
+    line-height: 1.05;
+    letter-spacing: -.025em;
+    font-variant-numeric: tabular-nums;
+    background: linear-gradient(180deg, var(--mh-fg), color-mix(in oklab, var(--mh-fg) 70%, var(--mh-state)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+.mh-big span { font-size: 15px; font-weight: 600; letter-spacing: 0; margin-left: 8px; color: var(--mh-muted); -webkit-text-fill-color: var(--mh-muted); }
+.mh-hero-sub { color: var(--mh-muted); font-size: 13px; margin-top: 4px; }
+.mh-hero-sub b { color: var(--mh-fg); font-weight: 600; }
+
+.mh-card {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: var(--mh-soft);
+    border: 1px solid color-mix(in oklab, var(--mh-line) 70%, transparent);
+}
+.mh-card-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 11.5px;
+    font-weight: 650;
+    letter-spacing: .04em;
+    color: var(--mh-muted);
+    margin-bottom: 10px;
+}
+.mh-card-title .mh-muted { font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.mh-note { font-size: 12.5px; }
+
+.mh-timeline { position: relative; padding-top: 22px; }
+.mh-tl-big { height: 14px; border-radius: 7px; }
+.mh-tl-marker {
+    position: absolute;
+    top: 0;
+    bottom: -4px;
+    width: 2px;
+    margin-left: -1px;
+    border-radius: 2px;
+    background: var(--mh-fg);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--mh-surface) 80%, transparent);
+    transition: left .45s cubic-bezier(.3, .7, .2, 1);
+}
+.mh-tl-marker em {
+    position: absolute;
+    top: -2px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-style: normal;
+    font-size: 10.5px;
+    font-weight: 650;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: var(--mh-fg);
+    color: var(--mh-surface);
+    white-space: nowrap;
+}
+.mh-tl-ends { display: flex; justify-content: space-between; font-size: 11px; color: var(--mh-muted); margin-top: 7px; font-variant-numeric: tabular-nums; }
+.mh-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 11.5px; color: var(--mh-muted); }
+.mh-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.mh-sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+
+.mh-quote {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 100%;
+    margin-top: 12px;
+    padding: 9px 12px;
+    text-align: left;
+    font: inherit;
+    color: var(--mh-fg);
+    border: 0;
+    border-left: 3px solid var(--mh-acc);
+    border-radius: 4px 12px 12px 4px;
+    background: color-mix(in oklab, var(--mh-acc) 8%, transparent);
+    cursor: pointer;
+}
+.mh-quote:hover { background: color-mix(in oklab, var(--mh-acc) 13%, transparent); }
+.mh-quote-k { font-size: 11px; color: var(--mh-muted); font-weight: 600; }
+.mh-quote-t { font-size: 13px; font-style: italic; line-height: 1.45; }
+.mh-quote-go { font-size: 11.5px; color: var(--mh-acc); font-weight: 600; margin-top: 2px; }
+
+.mh-stack { height: 12px; border-radius: 6px; }
+.mh-stack > i { display: block; flex: 0 0 auto; height: 100%; transition: flex-basis .45s cubic-bezier(.3, .7, .2, 1); }
+.mh-rows { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.mh-row { display: grid; grid-template-columns: 12px 1fr auto 42px; align-items: center; gap: 9px; font-size: 13px; }
+.mh-row-v { font-variant-numeric: tabular-nums; }
+.mh-row-p { text-align: right; color: var(--mh-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.mh-foot { margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--mh-line); font-size: 11.5px; color: var(--mh-muted); line-height: 1.5; }
+
+.mh-status { display: flex; flex-direction: column; gap: 10px; }
+.mh-reason { display: flex; gap: 10px; align-items: flex-start; }
+.mh-reason > i { margin-top: 2px; font-size: 15px; }
+.mh-reason b { display: block; font-size: 13px; font-weight: 600; line-height: 1.4; }
+.mh-reason small { display: block; color: var(--mh-muted); font-size: 12px; margin-top: 2px; line-height: 1.4; }
+.mh-reason-ok > i { color: var(--mh-acc); }
+.mh-reason-watch > i { color: var(--mh-watch); }
+.mh-reason-over > i { color: var(--mh-over); }
+
+.mh-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.mh-btn {
+    flex: 1 1 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: 12px;
+    border: 1px solid var(--mh-line);
+    background: var(--mh-soft);
+    color: var(--mh-fg);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 550;
+    cursor: pointer;
+    transition: background .15s, transform .1s;
+}
+.mh-btn:hover { background: var(--mh-faint); }
+.mh-btn:active { transform: scale(.97); }
+.mh-btn-icon { flex: 0 0 40px; padding: 0; }
+.mh-btn-primary { border-color: color-mix(in oklab, var(--mh-acc) 60%, transparent); background: color-mix(in oklab, var(--mh-acc) 20%, transparent); }
+.mh-btn.mh-busy i { animation: mh-spin .8s linear infinite; }
+@keyframes mh-spin { to { transform: rotate(360deg); } }
+
+.mh-meta { margin-top: 12px; text-align: center; font-size: 11px; color: var(--mh-muted); }
+
+.mh-empty { text-align: center; padding: 18px 8px 4px; }
+.mh-empty-art { width: 76px; height: 76px; margin: 0 auto 8px; display: grid; place-items: center; border-radius: 24px; background: color-mix(in oklab, var(--mh-acc) 12%, transparent); }
+.mh-empty-art svg { width: 54px; height: 54px; }
+.mh-empty .mh-logo-sun { fill: var(--mh-acc); }
+.mh-empty .mh-logo-ray { stroke: var(--mh-acc); }
+.mh-empty p { margin: 6px 0; }
+.mh-empty .mh-actions { justify-content: center; }
+.mh-empty .mh-btn { flex: 0 0 auto; }
+
+/* ───────── เส้นขอบความจำในแชท ───────── */
+
+#chat .mes.mh-horizon { position: relative; margin-top: 30px; }
+#chat .mes.mh-horizon::before {
+    content: attr(data-mh-label);
+    position: absolute;
+    top: -24px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 92%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    box-sizing: border-box;
+    padding: 2px 11px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: var(--mh-fg);
+    background: color-mix(in oklab, var(--mh-acc) 16%, var(--mh-surface));
+    border: 1px solid color-mix(in oklab, var(--mh-acc) 45%, transparent);
+    box-shadow: 0 3px 12px -6px var(--mh-shadow);
+    z-index: 3;
+    pointer-events: none;
+}
+#chat .mes.mh-horizon::after {
+    content: '';
+    position: absolute;
+    top: -13px;
+    left: 3%;
+    right: 3%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--mh-acc) 22%, var(--mh-acc) 78%, transparent);
+    z-index: 2;
+    pointer-events: none;
+}
+body.mh-hide-st-line #chat .mes.lastInContext { border-top: 0 none transparent !important; }
+#chat .mes.mh-forgotten { opacity: .48; transition: opacity .25s; }
+#chat .mes.mh-forgotten:hover, #chat .mes.mh-forgotten:focus-within { opacity: .9; }
+#chat .mes.mh-flash { animation: mh-flash 1.6s ease-out; }
+@keyframes mh-flash {
+    0%, 30% { box-shadow: inset 0 0 0 2px var(--mh-accent, var(--SmartThemeQuoteColor)); }
+    100% { box-shadow: inset 0 0 0 2px transparent; }
+}
+
+/* ───────── ตั้งค่า ───────── */
+
+.mh-settings h4 { margin: 14px 0 6px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.mh-settings h4 small { font-weight: 400; font-size: 11.5px; }
+.mh-set-places { display: flex; flex-direction: column; gap: 6px; }
+.mh-set-place { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 10px; background: var(--mh-soft); }
+.mh-set-place .checkbox_label span { display: flex; flex-direction: column; }
+.mh-set-place small { color: var(--mh-muted); font-size: 11px; }
+.mh-set-place select { width: auto; min-width: 120px; margin: 0; }
+.mh-set-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 2px 12px; }
+.mh-set-num { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.mh-set-num input { width: 72px; margin: 0; }
+.mh-set-num select { width: auto; margin: 0; }
+.mh-diag { margin-top: 8px; }
+.mh-diag textarea { width: 100%; font-family: monospace; font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+    .mh-badge *, #mh_sheet *, #mh_sheet, #chat .mes.mh-flash { animation: none !important; transition: none !important; }
+}

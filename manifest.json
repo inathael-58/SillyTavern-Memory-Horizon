@@ -1,0 +1,12 @@
+{
+    "display_name": "Memory Horizon",
+    "loading_order": 120,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Kitima (inathael-58)",
+    "version": "0.1.0",
+    "homePage": "https://github.com/inathael-58/SillyTavern-Memory-Horizon",
+    "auto_update": true
+}
