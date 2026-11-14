@@ -11,7 +11,7 @@
 
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
-const VERSION = '0.2.2'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.3.0'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'style.css', 'manifest.json'];
 
@@ -62,7 +62,7 @@ const SIDES = Object.freeze({ left: 'ซ้าย', right: 'ขวา' });
 // กลุ่มของ identifier ใน Prompt Manager
 const GROUPS = [
     { key: 'chat', label: 'ประวัติแชท', ids: ['chatHistory', 'conversation'] },
-    { key: 'inject', label: 'ข้อความที่ extension แทรก', ids: ['__injected'] },
+    { key: 'inject', label: 'แทรกตามความลึก (preset/extension)', ids: ['__injected'] },
     { key: 'card', label: 'การ์ดตัวละคร', ids: ['charDescription', 'charPersonality', 'scenario'] },
     { key: 'lore', label: 'Lorebook', ids: ['worldInfoBefore', 'worldInfoAfter'] },
     { key: 'persona', label: 'เพอร์โซนา', ids: ['personaDescription'] },
@@ -127,84 +127,99 @@ const nonHidden = chat => {
     return out;
 };
 
+const normText = t => String(t ?? '').replace(/\s+/g, ' ').trim();
+const contentText = c => typeof c === 'string' ? c
+    : Array.isArray(c) ? c.map(p => (typeof p === 'string' ? p : (p?.text ?? ''))).join(' ') : '';
+/** ชิ้นข้อความ ต้น/กลาง/ท้าย ไว้หาว่าข้อความแชทอยู่ในพรอมท์ไหม (ทนต่อชื่อที่เติมข้างหน้าและ regex ที่แก้บางส่วน) */
+function snippets(mes) {
+    const t = normText(mes);
+    if (!t) return [];
+    if (t.length <= 24) return [t];
+    const k = 24, mid = Math.floor((t.length - k) / 2);
+    return [t.slice(0, k), t.slice(mid, mid + k), t.slice(-k)];
+}
+const SYS_IDS = ['newMainChat', 'groupNudge', 'emptyUserMessageReplacement', 'continueNudge'];
+
 /**
- * นับข้อความแชทที่ ST ใส่ลงพรอมท์จริง จากโครงสร้างใน Prompt Manager ตอนประกอบพรอมท์
- * (ข้อความแชทแต่ละอันมี identifier "chatHistory-N") — อ่านก่อนที่ extension อื่นจะแก้พรอมท์
- * ใน CHAT_COMPLETION_PROMPT_READY จึงไม่เพี้ยนเวลามีตัวที่รวมหลายข้อความเป็นก้อนเดียว
- * นับเฉพาะ user/assistant/tool เหมือน openai_messages_count ของ ST (ข้อความแทรกแบบ system ไม่นับ)
- * @returns {number|null}
+ * อ่านก้อน chatHistory ที่ ST ประกอบไว้ใน Prompt Manager (ก่อน extension อื่นแก้พรอมท์ใน PROMPT_READY)
+ * แล้วจับคู่กับข้อความแชทจริงจากใหม่ไปเก่า — ข้อความที่ไม่ตรงกับแชทคือของที่แทรกตามความลึก
+ * (preset ที่ตั้ง @D, Author's Note, extension ต่าง ๆ) ซึ่ง ST ไม่ได้ติดป้ายแยกไว้ให้
+ * @returns {{count:number, oldest:number|null, chatTok:number, sysTok:number, injTok:number, orig:number, matched:boolean}|null}
  */
-function chatHistoryCount() {
-    const top = oai?.promptManager?.messages;
-    if (!Array.isArray(top?.collection)) return null;
-    const hist = top.collection.find(x => x?.identifier === 'chatHistory');
+function analyzeChatHistory(type) {
+    const hist = oai?.promptManager?.messages?.collection?.find?.(x => x?.identifier === 'chatHistory');
     if (!Array.isArray(hist?.collection)) return null;
-    let n = 0;
-    const walk = col => {
-        for (const it of col.collection) {
-            if (!it) continue;
-            if (Array.isArray(it.collection)) { walk(it); continue; }
-            const id = String(it.identifier ?? '');
-            if (it.role === 'tool' || (/^chatHistory-\d+$/.test(id) && (it.role === 'user' || it.role === 'assistant'))) n++;
-        }
-    };
+    const leaves = [];
+    const walk = col => { for (const it of col.collection) { if (!it) continue; if (Array.isArray(it.collection)) walk(it); else leaves.push(it); } };
     walk(hist);
-    return n;
+    const chat = ctx().chat ?? [];
+    const core = nonHidden(chat);
+    if (type === 'swipe') core.pop(); // ข้อความที่กำลังสุ่มใหม่ไม่ได้อยู่ในพรอมท์
+    let j = core.length - 1, count = 0, oldest = null, chatTok = 0, sysTok = 0, orig = 0;
+    let roleN = 0, roleTok = 0, roleOldest = null;
+    for (let i = leaves.length - 1; i >= 0; i--) {
+        const it = leaves[i];
+        const id = String(it.identifier ?? '');
+        const tok = Number(it.tokens) || 0;
+        orig += tok;
+        if (SYS_IDS.includes(id)) { sysTok += tok; continue; }
+        if (/^chatHistory-\d+$/.test(id) && (it.role === 'user' || it.role === 'assistant')) { roleN++; roleTok += tok; }
+        if (it.role === 'tool') { chatTok += tok; continue; } // ผลของ tool เป็นส่วนของข้อความที่เรียก tool
+        if (id.startsWith('toolCall-')) {
+            chatTok += tok;
+            if (j >= 0) { count++; oldest = core[j]; j--; }
+            continue;
+        }
+        const text = normText(contentText(it.content));
+        if (!text) continue;
+        for (let k = j; k >= Math.max(0, j - 2); k--) {
+            const sn = snippets(chat[core[k]]?.mes);
+            if (sn.length && sn.some(x => text.includes(x))) {
+                count++; chatTok += tok; oldest = core[k]; j = k - 1;
+                break;
+            }
+        }
+    }
+    if (roleN) roleOldest = core[Math.max(0, core.length - roleN)] ?? null;
+    // จับคู่ไม่ได้เลย (เช่น regex แปลงข้อความทั้งหมด) — ใช้นับตาม role แบบ ST แทน
+    if (!count && roleN) return { count: roleN, oldest: roleOldest, chatTok: roleTok, sysTok, injTok: Math.max(0, orig - roleTok - sysTok), orig, matched: false };
+    return { count, oldest, chatTok, sysTok, injTok: Math.max(0, orig - chatTok - sysTok), orig, matched: true };
 }
 
-/** จำนวนข้อความแชทที่อยู่ในพรอมท์รอบนี้ ตามแบบเดียวกับ setInContextMessages() ของ ST */
-function includedCount(type, dry) {
+/** text completion: ใช้ขอบที่ ST คำนวณไว้ (lastInContextMessageId) */
+function stIncludedCount(dry) {
+    if (dry) return null;
     const c = ctx();
-    if (c.mainApi === 'openai' && oai) {
-        const pm = chatHistoryCount();
-        const st = Number.isFinite(oai.openai_messages_count) ? oai.openai_messages_count : null;
-        if (pm !== null && st !== null && pm !== st) diag(`count differs: prompt manager ${pm} · after prompt-ready ${st} (an extension rewrote the prompt)`);
-        let n = pm ?? st;
-        if (n === null) return null;
-        if (type === 'swipe' || type === 'regenerate' || type === 'continue') n++;
-        return n;
-    }
-    if (dry) return null; // text completion ไม่อัปเดตขอบความจำตอนจำลอง
     const lic = c.chatMetadata?.lastInContextMessageId;
     return Number.isInteger(lic) ? c.chat.length - lic : null;
 }
 
-function readTokens() {
+/** ค่าที่ทำให้ผลวัดเดิมใช้ไม่ได้ถ้าเปลี่ยน: API · แหล่ง · โมเดล · ขนาด context · ที่กันไว้ตอบ · preset */
+function settingsSig() {
+    const c = ctx();
+    const o = oai?.oai_settings;
+    if (c.mainApi !== 'openai' || !o) return String(c.mainApi ?? '');
+    let model = '';
+    try { model = oai.getChatCompletionModel?.() ?? ''; } catch { /* ignore */ }
+    return [c.mainApi, o.chat_completion_source, model, o.openai_max_context, o.openai_max_tokens, o.preset_settings_openai].join('|');
+}
+
+function readTokens(a) {
     const c = ctx();
     if (c.mainApi !== 'openai' || !oai?.promptManager?.tokenHandler || !oai.oai_settings) return null;
     const counts = { ...(oai.promptManager.tokenHandler.getCounts?.() ?? {}) };
     const max = Number(oai.oai_settings.openai_max_context) || 0;
     const reserve = Number(oai.oai_settings.openai_max_tokens) || 0;
-    const total = Object.values(counts).reduce((a, v) => a + (Number(v) || 0), 0);
+    const total = Object.values(counts).reduce((x, v) => x + (Number(v) || 0), 0);
     if (!max || !total) return null;
-    splitChatHistory(counts);
-    return { counts, total, max, reserve, budget: Math.max(1, max - reserve) };
-}
-
-/**
- * ก้อน chatHistory ของ ST รวมข้อความที่ extension แทรกตามความลึก (role system) และ [Start a new chat]
- * ไว้ด้วย — แยกออกมา ให้ "ประวัติแชท" เหลือแต่ข้อความแชทจริง (user/assistant/tool)
- */
-function splitChatHistory(counts) {
+    // แยกก้อน chatHistory: แชทจริง / ที่แทรกตามความลึก / [Start a new chat]
     const orig = Number(counts.chatHistory) || 0;
-    const hist = oai?.promptManager?.messages?.collection?.find?.(x => x?.identifier === 'chatHistory');
-    if (!orig || !Array.isArray(hist?.collection)) return;
-    let chat = 0, sys = 0;
-    const walk = col => {
-        for (const it of col.collection) {
-            if (!it) continue;
-            if (Array.isArray(it.collection)) { walk(it); continue; }
-            const tok = Number(it.tokens) || 0;
-            const id = String(it.identifier ?? '');
-            if (['newMainChat', 'groupNudge', 'emptyUserMessageReplacement'].includes(id)) sys += tok;
-            else if (it.role === 'user' || it.role === 'assistant' || it.role === 'tool') chat += tok;
-        }
-    };
-    walk(hist);
-    if (chat + sys > orig) return; // ตัวเลขไม่ลงกัน — คงก้อนเดิมไว้
-    counts.chatHistory = chat;
-    if (sys) counts.newMainChat = (Number(counts.newMainChat) || 0) + sys;
-    if (orig - chat - sys > 0) counts.__injected = orig - chat - sys;
+    if (a && orig && a.chatTok + a.sysTok <= orig) {
+        counts.chatHistory = a.chatTok;
+        if (a.sysTok) counts.newMainChat = (Number(counts.newMainChat) || 0) + a.sysTok;
+        if (orig - a.chatTok - a.sysTok > 0) counts.__injected = orig - a.chatTok - a.sysTok;
+    }
+    return { counts, total, max, reserve, budget: Math.max(1, max - reserve) };
 }
 
 let userDryRun = false; // กด "วัดตอนนี้" เอง
@@ -213,22 +228,32 @@ function capture(type, dry) {
     const c = ctx();
     if (!c.chatId || !Array.isArray(c.chat)) return;
     // รอบจำลองที่ ST/extension สั่งเอง ไม่ทับค่าจากรอบที่ส่งจริงของแชทเดียวกันที่ยังไม่มีข้อความเพิ่ม
-    if (dry && !userDryRun && meas && !meas.est && meas.chatId === c.chatId && meas.len === c.chat.length) {
+    if (dry && !userDryRun && meas && !meas.est && meas.chatId === c.chatId && meas.len === c.chat.length && meas.sig === settingsSig()) {
         diag(`skip dry run: real measurement still current`);
         return;
     }
-    const n = includedCount(type, dry);
-    if (n === null && !readTokens()) return;
     const chat = c.chat;
     const list = nonHidden(chat);
-    let idx = meas?.idx ?? 0, all = meas?.all ?? true, sent = n ?? meas?.sent ?? 0;
-    if (n !== null) {
-        all = n >= list.length;
-        idx = all ? (list[0] ?? 0) : list[list.length - n];
-        sent = type === 'swipe' || type === 'regenerate' || type === 'continue' ? n - 1 : n;
+    const a = c.mainApi === 'openai' ? analyzeChatHistory(type) : null;
+    const tokens = readTokens(a);
+    let idx, all, sent;
+    if (a) {
+        sent = a.count;
+        if (a.oldest === null) { idx = (list.at(-1) ?? 0) + 1; all = !list.length; }
+        else { idx = a.oldest; all = idx <= (list[0] ?? 0); }
+        if (!a.matched) diag('chat history matched by role only (prompt text differs from chat)');
+    } else {
+        let n = stIncludedCount(dry);
+        if (n === null && !tokens) return;
+        idx = meas?.idx ?? 0; all = meas?.all ?? true; sent = n ?? meas?.sent ?? 0;
+        if (n !== null) {
+            all = n >= list.length;
+            idx = all ? (list[0] ?? 0) : list[list.length - n];
+            sent = type === 'swipe' || type === 'regenerate' || type === 'continue' ? n - 1 : n;
+        }
     }
-    meas = { v: 2, chatId: c.chatId, at: Date.now(), type, est: !!dry, idx, all, sent, len: chat.length, tokens: readTokens() };
-    diag(`capture ${type}${dry ? ' (dry)' : ''} n=${n} idx=${idx} all=${all} total=${meas.tokens?.total ?? '-'}`);
+    meas = { v: 3, chatId: c.chatId, at: Date.now(), type, est: !!dry, idx, all, sent, len: chat.length, tokens, sig: settingsSig() };
+    diag(`capture ${type}${dry ? ' (dry)' : ''} sent=${sent} idx=${idx} all=${all} total=${tokens?.total ?? '-'}${a ? ` chat=${a.chatTok} inj=${a.injTok}` : ''}`);
     if (!dry) {
         try { c.chatMetadata[MODULE] = meas; } catch { /* ignore */ }
     }
@@ -240,15 +265,19 @@ function loadForChat() {
     meas = null;
     if (!c.chatId) return;
     const saved = c.chatMetadata?.[MODULE];
-    if ((saved?.v === 1 || saved?.v === 2) && Number.isInteger(saved.idx)) {
-        // v1 (ก่อน 0.2.1) นับข้อความหลังจาก extension อื่นแก้พรอมท์แล้ว อาจเพี้ยน — ถือเป็นค่าประมาณจนกว่าจะวัดใหม่
-        meas = { ...saved, chatId: c.chatId, est: saved.est || saved.v === 1 };
-    } else if (Number.isInteger(c.chatMetadata?.lastInContextMessageId) && c.chat?.length) {
-        // จากเซสชันก่อนของ ST เอง — ใช้เป็นค่าประมาณ
-        const idx = c.chatMetadata.lastInContextMessageId;
-        meas = { v: 2, chatId: c.chatId, at: 0, type: 'st', est: true, idx, all: idx <= 0, sent: 0, len: c.chat.length, tokens: null };
-    }
     lastAlert = { chatId: c.chatId, level: 0 };
+    if (saved?.v === 3 && Number.isInteger(saved.idx)) {
+        meas = { ...saved, chatId: c.chatId };
+        return;
+    }
+    // ผลวัดจากเวอร์ชันก่อน (นับเพี้ยนได้) หรือไม่มีเลย: แชท Chat Completion ให้วัดใหม่เอง
+    // ไม่ใช้ lastInContextMessageId ของ ST เพราะอาจค้างมาจาก preset/โมเดล/ขนาด context เดิม
+    if (c.mainApi === 'openai') {
+        scheduleRecalc('chat opened without a current measurement');
+    } else if (Number.isInteger(c.chatMetadata?.lastInContextMessageId) && c.chat?.length) {
+        const idx = c.chatMetadata.lastInContextMessageId;
+        meas = { v: 3, chatId: c.chatId, at: 0, type: 'st', est: true, idx, all: idx <= 0, sent: 0, len: c.chat.length, tokens: null, sig: settingsSig() };
+    }
 }
 
 /** รวมทุกอย่างเป็นข้อมูลพร้อมแสดง คำนวณสดจากแชทปัจจุบัน */
@@ -258,9 +287,13 @@ function model() {
     const chat = Array.isArray(c.chat) ? c.chat : [];
     const list = nonHidden(chat);
     const T = list.length;
+    const recalcing = !!(recalcTimer || recalcRunning);
+    const stale = !!meas && meas.chatId === c.chatId && !!meas.sig && meas.sig !== settingsSig();
+    if (recalcing && (!meas || meas.chatId !== c.chatId || stale)) return { ready: false, T, state: 'recalc', reasons: [] };
     if (!c.chatId || !meas || meas.chatId !== c.chatId) {
         return { ready: false, T, state: 'idle', reasons: [] };
     }
+    if (stale) return { ready: false, T, state: 'idle', stale: true, reasons: [] };
     const all = meas.all || meas.idx <= (list[0] ?? 0);
     const idx = all ? (list[0] ?? 0) : meas.idx;
     const remembered = all ? T : list.filter(i => i >= idx).length;
@@ -343,7 +376,7 @@ const fmtK = n => {
 };
 const pct = f => `${Math.round(f * 100)}%`;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-const STATE_LABEL = { ok: 'ปกติ', watch: 'ระวัง', over: 'เกินงบ', idle: 'รอวัด' };
+const STATE_LABEL = { ok: 'ปกติ', watch: 'ระวัง', over: 'เกินงบ', idle: 'รอวัด', recalc: 'กำลังวัด' };
 
 /** ข้อความของแต่ละช่องข้อมูล: [ย่อ, เต็ม] หรือ null ถ้าไม่มีค่าให้แสดง */
 function fieldText(key, m) {
@@ -453,13 +486,14 @@ function renderBadges(m) {
         el.classList.toggle('mh-state-watch', m.state === 'watch');
         el.classList.toggle('mh-state-over', m.state === 'over');
         el.classList.toggle('mh-state-idle', m.state === 'idle');
+        el.classList.toggle('mh-state-recalc', m.state === 'recalc');
         el.classList.toggle('mh-side-right', s.side === 'right');
 
         const texts = fields.map(k => fieldText(k, m)).filter(Boolean);
         const tl = `<span class="mh-tl">${segHTML(m) || '<i class="mh-seg mh-seg-empty" style="flex-basis:100%"></i>'}</span>`;
         const dot = '<i class="mh-dot"></i>';
         let text = '';
-        if (!m.ready) text = size === 'mini' ? '' : '<span class="mh-txt mh-muted">รอวัด</span>';
+        if (!m.ready) text = size === 'mini' ? '' : `<span class="mh-txt mh-muted">${m.state === 'recalc' ? 'กำลังคำนวณ…' : 'รอวัด'}</span>`;
         // แบบย่อแสดงแค่ 2 ช่องแรกที่มีค่า (ตามลำดับในตั้งค่า) ให้ป้ายสั้น
         else if (size === 'compact') text = texts.length ? `<span class="mh-txt">${texts.slice(0, 2).map(t => esc(t[0])).join('<b class="mh-sep">·</b>')}</span>` : '';
         else if (size === 'full') text = texts.length ? `<span class="mh-txt mh-txt-full">${texts.map(t => `<span>${esc(t[1])}</span>`).join('')}</span>` : '';
@@ -471,7 +505,7 @@ function renderBadges(m) {
         } else {
             el.innerHTML = `<span class="mh-glyph">${tl}${dot}</span>${text}`;
         }
-        const label = (texts.map(t => t[1]).join(' · ') || (m.ready ? STATE_LABEL[m.state] : 'ยังไม่ได้วัด')) + (m.ready && m.est ? ' (ค่าประมาณ)' : '');
+        const label = (texts.map(t => t[1]).join(' · ') || (m.ready ? STATE_LABEL[m.state] : m.state === 'recalc' ? 'กำลังคำนวณใหม่' : 'ยังไม่ได้วัด')) + (m.ready && m.est ? ' (ค่าประมาณ)' : '');
         el.setAttribute('aria-label', `Memory Horizon: ${label}`);
         el.title = `Memory Horizon — ${label}`;
     }
@@ -653,12 +687,17 @@ function renderSheet() {
         </div>`;
 
     if (!m.ready) {
+        const msg = m.state === 'recalc'
+            ? ['กำลังคำนวณใหม่…', 'จำลองพรอมท์ตามพรีเซต โมเดล และขนาด context ปัจจุบัน ไม่ได้ส่งอะไรให้โมเดล']
+            : m.stale
+                ? ['การตั้งค่าเปลี่ยนไปแล้ว', 'พรีเซต โมเดล หรือขนาด context ไม่ตรงกับตอนที่วัดไว้ ตัวเลขเดิมใช้ไม่ได้ — กด “วัดตอนนี้” หรือส่งข้อความหนึ่งครั้ง']
+                : ['ยังไม่ได้วัดในแชทนี้', 'ส่งข้อความหนึ่งครั้ง หรือกด “วัดตอนนี้” เพื่อจำลองพรอมท์โดยไม่ส่งจริง'];
         body.innerHTML = `${head}
-            <div class="mh-empty">
+            <div class="mh-empty${m.state === 'recalc' ? ' mh-recalc' : ''}">
                 <div class="mh-empty-art">${LOGO_SVG}</div>
-                <p><b>ยังไม่ได้วัดในแชทนี้</b></p>
-                <p class="mh-muted">ส่งข้อความหนึ่งครั้ง หรือกด “วัดตอนนี้” เพื่อจำลองพรอมท์โดยไม่ส่งจริง</p>
-                <div class="mh-actions"><button class="mh-btn mh-btn-primary" data-act="measure"><i class="fa-solid fa-wand-magic-sparkles"></i> วัดตอนนี้</button></div>
+                <p><b>${msg[0]}</b></p>
+                <p class="mh-muted">${msg[1]}</p>
+                ${m.state === 'recalc' ? '' : '<div class="mh-actions"><button class="mh-btn mh-btn-primary" data-act="measure"><i class="fa-solid fa-wand-magic-sparkles"></i> วัดตอนนี้</button></div>'}
             </div>`;
         return;
     }
@@ -759,16 +798,46 @@ async function measureNow() {
     const c = ctx();
     if (!c.chatId) { toastr.info('เปิดแชทก่อนนะ'); return; }
     if (typeof c.generate !== 'function') { toastr.warning('ST รุ่นนี้ยังจำลองพรอมท์จาก extension ไม่ได้ — ส่งข้อความหนึ่งครั้งแทน'); return; }
+    if (busy) { toastr.info('รอให้ตอบเสร็จก่อน แล้วจะวัดให้เอง'); }
+    scheduleRecalc('measure now', 0);
+}
+
+// ───────────────────────── recalculation ─────────────────────────
+// เปลี่ยนพรีเซต/โมเดล/ขนาด context หรือเปิดแชทที่ยังไม่มีผลวัด: จำลองพรอมท์ใหม่เอง (dry run ไม่ส่งอะไรให้โมเดล)
+
+let recalcTimer = null;
+let recalcRunning = false;
+let busy = false;        // กำลังสร้างคำตอบจริงอยู่
+let busyAt = 0;
+let lastRecalcSig = '';
+
+function scheduleRecalc(why, delay = 900) {
+    const c = ctx();
+    if (!settings().enabled || !c.chatId || c.mainApi !== 'openai' || typeof c.generate !== 'function') return;
+    clearTimeout(recalcTimer);
+    recalcTimer = setTimeout(() => runRecalc(why), delay);
+    refresh();
+}
+
+async function runRecalc(why) {
+    recalcTimer = null;
+    if (busy && Date.now() - busyAt < 60_000) { recalcTimer = setTimeout(() => runRecalc(why), 1500); return; }
+    busy = false;
+    const c = ctx();
+    if (!c.chatId) { refresh(); return; }
+    recalcRunning = true;
+    lastRecalcSig = settingsSig();
+    diag(`recalc: ${why}`);
+    refresh();
     try {
-        sheet?.querySelector('[data-act="measure"]')?.classList.add('mh-busy');
         userDryRun = true;
         await c.generate('normal', {}, true);
     } catch (err) {
-        reportError('จำลองพรอมท์ไม่สำเร็จ', err);
+        diag(`recalc failed: ${err?.message ?? err}`);
     } finally {
         userDryRun = false;
-        sheet?.querySelector('[data-act="measure"]')?.classList.remove('mh-busy');
-        renderSheet();
+        recalcRunning = false;
+        refresh();
     }
 }
 
@@ -1063,14 +1132,19 @@ function wireEvents() {
 
     on('GENERATION_STARTED', (type, _opts, dryRun) => {
         pending = { type: type || 'normal', dry: !!dryRun };
+        if (!dryRun) { busy = true; busyAt = Date.now(); }
     });
+    for (const ev of ['GENERATION_ENDED', 'GENERATION_STOPPED', 'MESSAGE_RECEIVED']) on(ev, () => { busy = false; });
+    for (const ev of ['OAI_PRESET_CHANGED_AFTER', 'CHATCOMPLETION_MODEL_CHANGED', 'CHATCOMPLETION_SOURCE_CHANGED', 'MAIN_API_CHANGED', 'CONNECTION_PROFILE_LOADED']) {
+        on(ev, () => { if (meas && meas.sig !== settingsSig()) scheduleRecalc(ev.toLowerCase(), 1200); });
+    }
     on('GENERATE_AFTER_DATA', (_data, dryRun) => {
         const p = pending; pending = null;
         if (!p || p.type === 'quiet') return; // งานเบื้องหลังของ extension อื่น — ไม่นับ
         if (!settings().enabled) return;
         capture(p.type, p.dry || !!dryRun);
     });
-    on('CHAT_CHANGED', () => { pending = null; loadForChat(); refresh(); });
+    on('CHAT_CHANGED', () => { pending = null; clearTimeout(recalcTimer); recalcTimer = null; loadForChat(); refresh(); });
     for (const ev of ['MESSAGE_RECEIVED', 'MESSAGE_SENT', 'MESSAGE_DELETED', 'MESSAGE_UPDATED', 'MESSAGE_SWIPED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'MORE_MESSAGES_LOADED']) {
         on(ev, () => refresh());
     }
@@ -1082,6 +1156,15 @@ function wireEvents() {
     window.visualViewport?.addEventListener('resize', placeFloat);
     // ST หรือ extension อื่นสร้างแถบพิมพ์ใหม่ / Quick Dock คืนปุ่ม — เช็กทุก 3 วิ
     setInterval(() => { if (settings().enabled && [...badges.values()].some(b => !b.isConnected)) refresh(); }, 3000);
+    // ขนาด context / ที่กันไว้ตอบ เปลี่ยนจากแถบเลื่อนโดยไม่มี event — เช็กทุก 2 วิ แล้ววัดใหม่ครั้งเดียวต่อค่าใหม่
+    let shownStale = false;
+    setInterval(() => {
+        if (!settings().enabled || !meas || meas.chatId !== ctx().chatId) return;
+        const sig = settingsSig();
+        const stale = !!meas.sig && meas.sig !== sig;
+        if (stale !== shownStale) { shownStale = stale; refresh(); } // ป้ายเปลี่ยนเป็น "กำลังคำนวณ/รอวัด" ทันที
+        if (stale && !recalcTimer && !recalcRunning && sig !== lastRecalcSig) scheduleRecalc('settings changed', 1500);
+    }, 2000);
 }
 
 jQuery(async () => {
