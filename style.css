@@ -17,7 +17,7 @@
     --mh-soft: color-mix(in oklab, var(--mh-fg) 6%, transparent);
     --mh-line: color-mix(in oklab, var(--SmartThemeBorderColor, #777) 75%, transparent);
     --mh-tint: var(--SmartThemeBlurTintColor, rgba(24, 24, 30, .9));
-    --mh-surface: var(--mh-tint);
+    --mh-surface: var(--mh-surface-solid, var(--mh-tint));
     --mh-shadow: var(--SmartThemeShadowColor, rgba(0, 0, 0, .5));
     --mh-watch: color-mix(in oklab, #f6a623 74%, var(--mh-fg));
     --mh-over: color-mix(in oklab, #f2495c 74%, var(--mh-fg));
@@ -35,7 +35,7 @@
 /* พื้นทึบจากสีพื้นของธีม (ตัดความโปร่งใสออก) + เฉดกลุ่มที่หมุน hue จากสีเน้น */
 @supports (color: rgb(from red r g b / 1)) {
     .mh-badge, #mh_sheet, .mh-settings, #chat .mes.mh-horizon {
-        --mh-surface: rgb(from var(--mh-tint) r g b / .96);
+        --mh-surface: var(--mh-surface-solid, rgb(from var(--mh-tint) r g b / .96));
     }
 }
 @supports (color: oklch(from red l c h)) {
