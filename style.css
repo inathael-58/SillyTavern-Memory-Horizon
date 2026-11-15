@@ -10,8 +10,8 @@
 #mh_sheet,
 .mh-settings,
 #chat .mes.mh-horizon {
-    --mh-fg: var(--SmartThemeBodyColor, #dcdcd2);
-    --mh-acc: var(--mh-accent, var(--SmartThemeQuoteColor, #e18a24));
+    --mh-fg: var(--mh-fg-js, var(--SmartThemeBodyColor, #dcdcd2));
+    --mh-acc: var(--mh-acc-js, var(--mh-accent, var(--SmartThemeQuoteColor, #e18a24)));
     --mh-muted: color-mix(in oklab, var(--mh-fg) 62%, transparent);
     --mh-faint: color-mix(in oklab, var(--mh-fg) 13%, transparent);
     --mh-soft: color-mix(in oklab, var(--mh-fg) 6%, transparent);
@@ -19,16 +19,17 @@
     --mh-tint: var(--SmartThemeBlurTintColor, rgba(24, 24, 30, .9));
     --mh-surface: var(--mh-surface-solid, var(--mh-tint));
     --mh-shadow: var(--SmartThemeShadowColor, rgba(0, 0, 0, .5));
-    --mh-watch: color-mix(in oklab, #f6a623 74%, var(--mh-fg));
-    --mh-over: color-mix(in oklab, #f2495c 74%, var(--mh-fg));
+    --mh-watch: var(--mh-watch-js, color-mix(in oklab, #f6a623 74%, var(--mh-fg)));
+    --mh-over: var(--mh-over-js, color-mix(in oklab, #f2495c 74%, var(--mh-fg)));
     --mh-state: var(--mh-acc);
 
     /* สีของแต่ละกลุ่มใน "อะไรกิน context" — fallback ใช้สีธีมตรง ๆ */
-    --mh-c-card: var(--SmartThemeEmColor, #9fc);
-    --mh-c-lore: var(--SmartThemeUnderlineColor, #8cf);
-    --mh-c-persona: color-mix(in oklab, var(--mh-acc) 50%, var(--SmartThemeEmColor, #9fc));
-    --mh-c-examples: color-mix(in oklab, var(--SmartThemeUnderlineColor, #8cf) 50%, var(--mh-fg));
-    --mh-c-preset: color-mix(in oklab, var(--mh-fg) 55%, transparent);
+    --mh-c-card: var(--mh-c-card-js, var(--SmartThemeEmColor, #9fc));
+    --mh-c-lore: var(--mh-c-lore-js, var(--SmartThemeUnderlineColor, #8cf));
+    --mh-c-persona: var(--mh-c-persona-js, color-mix(in oklab, var(--mh-acc) 50%, var(--SmartThemeEmColor, #9fc)));
+    --mh-c-examples: var(--mh-c-examples-js, color-mix(in oklab, var(--SmartThemeUnderlineColor, #8cf) 50%, var(--mh-fg)));
+    --mh-c-preset: var(--mh-c-preset-js, color-mix(in oklab, var(--mh-fg) 55%, transparent));
+    --mh-c-inject: var(--mh-c-inject-js, color-mix(in oklab, var(--mh-acc) 45%, var(--mh-c-lore)));
     --mh-c-ext: color-mix(in oklab, var(--SmartThemeBorderColor, #777) 90%, var(--mh-fg));
 }
 
@@ -40,11 +41,11 @@
 }
 @supports (color: oklch(from red l c h)) {
     .mh-badge, #mh_sheet, .mh-settings, #chat .mes.mh-horizon {
-        --mh-c-card: oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .1) calc(h + 60));
-        --mh-c-lore: oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .1) calc(h + 140));
-        --mh-c-persona: oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .09) calc(h + 200));
-        --mh-c-examples: oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .08) calc(h + 260));
-        --mh-c-preset: oklch(from var(--mh-acc) clamp(.5, l, .75) calc(max(c, .06) * .45) calc(h + 300));
+        --mh-c-card: var(--mh-c-card-js, oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .1) calc(h + 60)));
+        --mh-c-lore: var(--mh-c-lore-js, oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .1) calc(h + 140)));
+        --mh-c-persona: var(--mh-c-persona-js, oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .09) calc(h + 200)));
+        --mh-c-examples: var(--mh-c-examples-js, oklch(from var(--mh-acc) clamp(.55, l, .82) max(c, .08) calc(h + 260)));
+        --mh-c-preset: var(--mh-c-preset-js, oklch(from var(--mh-acc) clamp(.5, l, .75) calc(max(c, .06) * .45) calc(h + 300)));
     }
 }
 
@@ -80,7 +81,7 @@
 .mh-seg-empty { background: transparent; }
 
 .mh-g-chat { background: var(--mh-acc); }
-.mh-g-inject { background: color-mix(in oklab, var(--mh-acc) 45%, var(--mh-c-lore)); }
+.mh-g-inject { background: var(--mh-c-inject); }
 .mh-g-card { background: var(--mh-c-card); }
 .mh-g-lore { background: var(--mh-c-lore); }
 .mh-g-persona { background: var(--mh-c-persona); }
