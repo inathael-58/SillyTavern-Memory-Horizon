@@ -11,9 +11,10 @@
 
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
-const VERSION = '0.3.5'; // ให้ตรงกับ manifest.json เสมอ
+import { installThemePalette } from './theme-palette.js';
+const VERSION = '0.3.6'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
-const FILES = ['index.js', 'style.css', 'manifest.json'];
+const FILES = ['index.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
 const PLACES = Object.freeze({
     perch: { label: 'เกาะขอบแถบพิมพ์', hint: 'ป้ายเล็กลอยเหนือแถบพิมพ์ ไม่เบียดช่องพิมพ์' },
@@ -1044,102 +1045,42 @@ function maybeAlert(m) {
 }
 
 /**
- * พื้นทึบของป้าย/หน้ารายละเอียด: อ่านสี UI Background ของธีม (มักโปร่งใส) แล้วทำให้ทึบเอง
- * ไม่พึ่ง CSS relative color ซึ่ง Safari บางรุ่นคำนวณไม่ได้ ทำให้พื้นโปร่งจนเห็นแชทด้านหลัง
+ * สีที่อ่านออกเสมอ: ใช้แม่แบบสีกลาง theme-palette.js แบบเดียวกับทุก extension ในชุด
+ * (พื้นทึบจากสี UI ของธีม · ตัวอักษร ≥4.5:1 · สีเน้น ≥3:1 · สีกลุ่มหมุนโทนจากสีเน้น · สีสถานะ)
+ * แล้วเขียนลงตัวแปรเดิมของ Memory Horizon (--mh-*-js) ที่ CSS ใช้อยู่แล้ว
  */
-let surfaceKey = '';
-function parseColor(str) {
-    const t = String(str || '');
-    let m = t.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+)(%?))?/);
-    if (m) return [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : (m[5] ? +m[4] / 100 : +m[4])];
-    m = t.match(/color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?/);
-    if (m) return [m[1] * 255, m[2] * 255, m[3] * 255, m[4] === undefined ? 1 : +m[4]];
-    return null;
-}
-// ── สีที่อ่านออกเสมอ ──
-// ช่องสีของธีม (Quote/Italics/…) ออกแบบให้ตัดกับ "พื้นแชท" แต่ป้ายและหน้ารายละเอียดของเราวางบน "พื้น UI"
-// ธีมจำนวนมากจึงได้สีเน้นกลืนกับพื้น (ครีมบนเบจ น้ำตาลเข้มบนเขียวเข้ม) — คำนวณ contrast จริงแล้วปรับความสว่างให้
-const srgbLin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
-const luminance = ([r, g, b]) => 0.2126 * srgbLin(r) + 0.7152 * srgbLin(g) + 0.0722 * srgbLin(b);
-const contrastOf = (a, b) => { const x = luminance(a), y = luminance(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
-function rgbToHsl([r, g, b]) {
-    r /= 255; g /= 255; b /= 255;
-    const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
-    if (max === min) return [0, 0, l];
-    const d = max - min, s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-    return [h * 60, s, l];
-}
-function hslToRgb([h, s, l]) {
-    h = ((h % 360) + 360) % 360 / 360;
-    if (!s) return [l * 255, l * 255, l * 255];
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
-    const t = x => { x = (x + 1) % 1; return x < 1 / 6 ? p + (q - p) * 6 * x : x < 1 / 2 ? q : x < 2 / 3 ? p + (q - p) * (2 / 3 - x) * 6 : p; };
-    return [t(h + 1 / 3) * 255, t(h) * 255, t(h - 1 / 3) * 255];
-}
-/** เลื่อนความสว่าง (คงโทนสี) จนตัดกับพื้นอย่างน้อย min */
-function ensureContrast(rgb, bg, min) {
-    if (contrastOf(rgb, bg) >= min) return rgb;
-    const [h, s, l0] = rgbToHsl(rgb);
-    const goDark = luminance(bg) > 0.18;
-    for (let i = 1; i <= 40; i++) {
-        const l = goDark ? l0 - i * 0.025 : l0 + i * 0.025;
-        if (l < 0 || l > 1) break;
-        const c = hslToRgb([h, s, l]);
-        if (contrastOf(c, bg) >= min) return c;
-    }
-    return goDark ? [20, 20, 24] : [240, 240, 236];
-}
-const over = (c, bg) => c[3] === undefined || c[3] >= 1 ? c.slice(0, 3) : c.slice(0, 3).map((v, i) => v * c[3] + bg[i] * (1 - c[3]));
-const css = c => `rgb(${c.map(v => Math.round(Math.max(0, Math.min(255, v)))).join(', ')})`;
-
+let palette = null;
 let paletteKey = '';
+function paintPalette(p) {
+    if (!p) return;
+    const out = {
+        '--mh-surface-solid': p.surface,
+        '--mh-fg-js': p.fg,
+        '--mh-acc-js': p.accent,
+        // hue +60/+140/+200/+260/+320/+30 from the accent: the same groups as before
+        '--mh-c-card-js': p.c1,
+        '--mh-c-lore-js': p.c2,
+        '--mh-c-persona-js': p.c3,
+        '--mh-c-examples-js': p.c4,
+        '--mh-c-inject-js': p.c5,
+        '--mh-c-preset-js': p.c6,
+        '--mh-watch-js': p.warn,
+        '--mh-over-js': p.danger,
+    };
+    const key = JSON.stringify(out);
+    if (key === paletteKey) return;
+    paletteKey = key;
+    for (const [k, v] of Object.entries(out)) document.documentElement.style.setProperty(k, v);
+    diag(`palette surface=${p.surface} fg=${p.fg} acc=${p.accent}`);
+}
 function applySurface() {
     try {
-        const vars = ['--SmartThemeBlurTintColor', '--SmartThemeChatTintColor', '--SmartThemeBodyColor', ...Object.values(ACCENTS).map(a => a[1])];
-        const probe = document.createElement('div');
-        probe.style.cssText = 'position:absolute;width:0;height:0;visibility:hidden;pointer-events:none';
-        document.body.append(probe);
-        const read = v => { probe.style.color = `var(${v})`; return parseColor(getComputedStyle(probe).color); };
-        const got = Object.fromEntries(vars.map(v => [v, read(v)]));
-        probe.remove();
-        const tint = got['--SmartThemeBlurTintColor'], chat = got['--SmartThemeChatTintColor'];
-        // สีพื้นที่โปร่งเกือบหมด (alpha ต่ำมาก) มักไม่มีความหมายของสีจริง — ใช้สีพื้นแชทแทน
-        const pick = tint && tint[3] >= 0.08 ? tint : chat && chat[3] >= 0.08 ? chat : tint;
-        if (!pick) return;
-        const bg = pick.slice(0, 3);
-        const out = { '--mh-surface-solid': `rgba(${bg.map(v => Math.round(v)).join(', ')}, 0.97)` };
-
-        const body = got['--SmartThemeBodyColor'];
-        const fg = ensureContrast(body ? over(body, bg) : (luminance(bg) > 0.18 ? [30, 30, 34] : [230, 230, 222]), bg, 4.5);
-        out['--mh-fg-js'] = css(fg);
-
-        // สีเน้น: ช่องที่ผู้ใช้เลือก ปรับให้ตัดกับพื้นอย่างน้อย 3:1 (มาตรฐานสำหรับกราฟและไอคอน)
-        const srcVar = ACCENTS[settings().accent]?.[1] ?? ACCENTS.quote[1];
-        const raw = got[srcVar] ? over(got[srcVar], bg) : fg;
-        let [ah, as] = rgbToHsl(raw);
-        if (as < 0.12) as = 0; // สีเทา/ขาว/ดำ: คงความเป็นกลาง
-        const acc = ensureContrast(raw, bg, 3);
-        out['--mh-acc-js'] = css(acc);
-
-        // สีของกลุ่ม: หมุนโทนจากสีเน้น ความอิ่มพอดี ๆ และตัดกับพื้นอย่างน้อย 2.6:1
-        const light = luminance(bg) > 0.18;
-        const sat = as ? Math.min(0.75, Math.max(0.42, as)) : 0.45;
-        const mk = (dh, sMul = 1) => css(ensureContrast(hslToRgb([ah + dh, sat * sMul, light ? 0.42 : 0.66]), bg, 2.6));
-        out['--mh-c-card-js'] = mk(60);
-        out['--mh-c-lore-js'] = mk(140);
-        out['--mh-c-persona-js'] = mk(200);
-        out['--mh-c-examples-js'] = mk(260);
-        out['--mh-c-inject-js'] = mk(320, 0.8);
-        out['--mh-c-preset-js'] = mk(30, 0.3);
-        out['--mh-watch-js'] = css(ensureContrast(hslToRgb([38, 0.9, light ? 0.42 : 0.6]), bg, 3));
-        out['--mh-over-js'] = css(ensureContrast(hslToRgb([356, 0.78, light ? 0.45 : 0.64]), bg, 3));
-
-        const key = JSON.stringify(out);
-        if (key === paletteKey) return;
-        paletteKey = key;
-        for (const [k, v] of Object.entries(out)) document.documentElement.style.setProperty(k, v);
-        diag(`palette bg=${css(bg)} fg=${out['--mh-fg-js']} acc=${out['--mh-acc-js']} (raw ${css(raw)})`);
+        if (!palette) {
+            // the module watches theme changes itself (<html>/<body> style and class, SETTINGS_UPDATED)
+            palette = installThemePalette({ prefix: 'mhz', accent: () => (ACCENTS[settings().accent] ? settings().accent : 'quote') });
+            palette.onChange(paintPalette);
+        }
+        paintPalette(palette.refresh() ?? palette.current);
     } catch (err) { diag(`palette: ${err?.message ?? err}`); }
 }
 
@@ -1407,11 +1348,7 @@ function wireEvents() {
         on(ev, () => refresh());
     }
     on('SETTINGS_UPDATED', () => { applySurface(); refresh(); });
-    // เปลี่ยนธีม (เช่น ตามเวลากลางวัน/กลางคืน) — ST ตั้งตัวแปรสีบน <html>/<body> ใหม่
-    let surfTimer = null;
-    const surfObs = new MutationObserver(() => { clearTimeout(surfTimer); surfTimer = setTimeout(applySurface, 300); });
-    surfObs.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
-    surfObs.observe(document.body, { attributes: true, attributeFilter: ['style', 'class'] });
+    // theme changes (e.g. day/night themes) are picked up by theme-palette.js itself
 
     const chatEl = document.getElementById('chat');
     if (chatEl) new MutationObserver(scheduleMarker).observe(chatEl, { childList: true });
