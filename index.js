@@ -12,7 +12,7 @@
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
 import { installThemePalette } from './theme-palette.js';
-const VERSION = '0.3.6'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.3.7'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
@@ -151,8 +151,17 @@ const SYS_IDS = ['newMainChat', 'groupNudge', 'emptyUserMessageReplacement', 'co
  * @returns {{count:number, oldest:number|null, chatTok:number, sysTok:number, injTok:number, orig:number, matched:boolean}|null}
  */
 function analyzeChatHistory(type) {
-    const hist = oai?.promptManager?.messages?.collection?.find?.(x => x?.identifier === 'chatHistory');
-    if (!Array.isArray(hist?.collection)) return null;
+    const top = oai?.promptManager?.messages?.collection;
+    let hist = top?.find?.(x => x?.identifier === 'chatHistory');
+    if (!Array.isArray(hist?.collection)) {
+        // เปิด Squash system messages: ST แบนโครงสร้างพรอมท์ก่อนเราเห็น — เก็บเฉพาะชิ้นที่มาจากประวัติแชท
+        if (!Array.isArray(top)) return null;
+        const id = it => String(it?.identifier ?? '');
+        const flat = top.filter(it => it && !Array.isArray(it.collection)
+            && (/^chatHistory-\d+$/.test(id(it)) || SYS_IDS.includes(id(it)) || id(it).startsWith('toolCall-') || it.role === 'tool'));
+        if (!flat.length) return null;
+        hist = { collection: flat };
+    }
     const leaves = [];
     const walk = col => { for (const it of col.collection) { if (!it) continue; if (Array.isArray(it.collection)) walk(it); else leaves.push(it); } };
     walk(hist);
@@ -208,13 +217,38 @@ function settingsSig() {
     return [c.mainApi, o.chat_completion_source, model, o.openai_max_context, o.openai_max_tokens, o.preset_settings_openai].join('|');
 }
 
+/**
+ * ตัวนับของ ST เก็บ token ที่นับแบบไม่ระบุชื่อไว้ใต้คีย์ "undefined" และไม่ล้างจนกว่าจะประกอบพรอมท์รอบหน้า
+ * ตอนเปิด Squash system messages ST นับข้อความที่รวมแล้วซ้ำทุกครั้งที่ต่อชิ้นใหม่ คีย์นี้จึงพองได้เป็นแสนทั้งที่ไม่ได้ส่งจริง
+ * (รอบจำลองไม่ squash เลยไม่เจอ — รอบส่งจริงเท่านั้นที่เพี้ยน) · เก็บเฉพาะคีย์ที่เป็นชื่อส่วนของพรอมท์จริง
+ */
+function cleanCounts(raw) {
+    const counts = {};
+    for (const [k, v] of Object.entries(raw ?? {})) {
+        const n = Number(v);
+        if (!k || k === 'undefined' || k === 'null' || !Number.isFinite(n) || n <= 0) continue;
+        counts[k] = n;
+    }
+    return counts;
+}
+const sumCounts = counts => Object.values(counts).reduce((x, v) => x + (Number(v) || 0), 0);
+
+/** ผลวัดที่บันทึกไว้จากเวอร์ชันก่อนอาจมีคีย์ "undefined" ปนอยู่ — ล้างแล้วรวมใหม่ */
+function cleanSavedTokens(tk) {
+    if (!tk?.counts) return tk ?? null;
+    const counts = cleanCounts(tk.counts);
+    const total = sumCounts(counts);
+    if (!total) return null;
+    return { ...tk, counts, total };
+}
+
 function readTokens(a) {
     const c = ctx();
     if (c.mainApi !== 'openai' || !oai?.promptManager?.tokenHandler || !oai.oai_settings) return null;
-    const counts = { ...(oai.promptManager.tokenHandler.getCounts?.() ?? {}) };
+    const counts = cleanCounts(oai.promptManager.tokenHandler.getCounts?.());
     const max = Number(oai.oai_settings.openai_max_context) || 0;
     const reserve = Number(oai.oai_settings.openai_max_tokens) || 0;
-    const total = Object.values(counts).reduce((x, v) => x + (Number(v) || 0), 0);
+    const total = sumCounts(counts);
     if (!max || !total) return null;
     // แยกก้อน chatHistory: แชทจริง / ที่แทรกตามความลึก / [Start a new chat]
     const orig = Number(counts.chatHistory) || 0;
@@ -280,7 +314,7 @@ function loadForChat() {
     const saved = c.chatMetadata?.[MODULE];
     lastAlert = { chatId: c.chatId, level: 0 };
     if (saved?.v === 3 && Number.isInteger(saved.idx)) {
-        meas = { ...saved, chatId: c.chatId };
+        meas = { ...saved, chatId: c.chatId, tokens: cleanSavedTokens(saved.tokens) };
         return;
     }
     // ผลวัดจากเวอร์ชันก่อน (นับเพี้ยนได้) หรือไม่มีเลย: แชท Chat Completion ให้วัดใหม่เอง
