@@ -268,7 +268,8 @@
     top: 0;
     height: 100vh;
     height: 100dvh;
-    z-index: 2147483646;
+    /* Stays below Quick Dock (2147483640+), so the dock is never covered. */
+    z-index: 2147483000;
     visibility: hidden;
     pointer-events: none;
     color: var(--mh-fg);
