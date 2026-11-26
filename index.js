@@ -12,7 +12,7 @@
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
 import { installThemePalette } from './theme-palette.js';
-const VERSION = '0.3.7'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.3.8'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
@@ -199,6 +199,16 @@ function analyzeChatHistory(type) {
     return { count, oldest, chatTok, sysTok, injTok: Math.max(0, orig - chatTok - sysTok), orig, matched: true };
 }
 
+/** Memory Hub ตัดข้อความที่สรุปแล้วออกจากพรอมท์ตอนส่งจริง — รอบจำลองไม่ผ่าน interceptor จึงไม่เห็นการตัดนี้ */
+function memoryHubTrims() {
+    const c = ctx();
+    const s = c.extensionSettings?.memory_hub;
+    const mh = c.chatMetadata?.memory_hub;
+    return !!s && s.enabled !== false && s.trimSummarized !== false
+        && Number.isInteger(mh?.lastEnd) && mh.lastEnd >= 0
+        && Array.isArray(mh.memories) && mh.memories.some(x => x?.source === 'auto');
+}
+
 /** text completion: ใช้ขอบที่ ST คำนวณไว้ (lastInContextMessageId) */
 function stIncludedCount(dry) {
     if (dry) return null;
@@ -265,9 +275,12 @@ let userDryRun = false; // กด "วัดตอนนี้" เอง
 function capture(type, dry) {
     const c = ctx();
     if (!c.chatId || !Array.isArray(c.chat)) return;
-    // รอบจำลองที่ ST/extension สั่งเอง ไม่ทับค่าจากรอบที่ส่งจริงของแชทเดียวกันที่ยังไม่มีข้อความเพิ่ม
-    if (dry && !userDryRun && meas && !meas.est && meas.chatId === c.chatId && meas.len === c.chat.length && meas.sig === settingsSig()) {
-        diag(`skip dry run: real measurement still current`);
+    // รอบจำลองที่ ST สั่งเอง (Prompt Manager วาดใหม่ทุกครั้งที่ AI ตอบเสร็จ) ข้าม interceptor ของ extension
+    // (เช่น Memory Hub ตัดข้อความที่สรุปแล้วออกจากพรอมท์) และไม่ squash จึงไม่ใช่พรอมท์ที่ส่งจริง
+    // ถ้ายังมีผลจากรอบส่งจริงของแชทนี้ ตั้งค่าเดิม และแชทมีแค่ข้อความต่อท้าย (เช่น คำตอบที่เพิ่งได้) ให้ใช้ผลนั้นต่อ
+    // ข้อความที่ต่อท้ายนับสดใน model() อยู่แล้ว · ถ้ามีข้อความถูกลบ ค่าจำลองใกล้ความจริงกว่า จึงรับ
+    if (dry && !userDryRun && meas && !meas.est && meas.chatId === c.chatId && c.chat.length >= meas.len && meas.sig === settingsSig()) {
+        diag(`skip dry run: real measurement still current (len ${meas.len} → ${c.chat.length})`);
         return;
     }
     const chat = c.chat;
@@ -937,7 +950,7 @@ function renderSheet() {
             ${typeof globalThis.LoreLens?.open === 'function' ? '<button class="mh-btn" data-act="lorelens" title="ดูว่าแต่ละ extension / lorebook entry กินเท่าไหร่ใน Lore Lens"><i class="fa-solid fa-magnifying-glass-chart"></i> ละเอียดใน Lore Lens</button>' : ''}
             <button class="mh-btn mh-btn-icon" data-act="settings" title="ตั้งค่า" aria-label="ตั้งค่า"><i class="fa-solid fa-sliders"></i></button>
         </div>
-        <div class="mh-meta">${m.est ? '≈ ' : ''}${src}${when ? ` · ${when}` : ''}</div>`;
+        <div class="mh-meta">${m.est ? '≈ ' : ''}${src}${when ? ` · ${when}` : ''}${m.est && memoryHubTrims() ? '<br>รอบจำลองไม่ผ่าน Memory Hub — ตอนส่งจริงข้อความที่สรุปแล้วจะถูกตัดออก ตัวเลขจะตรงหลังส่งข้อความครั้งถัดไป' : ''}</div>`;
 }
 
 const LOGO_SVG = `<svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
