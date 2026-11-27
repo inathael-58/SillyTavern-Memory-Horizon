@@ -12,7 +12,7 @@
 const MODULE = 'memory_horizon';
 const LOG = '[Memory Horizon]';
 import { installThemePalette } from './theme-palette.js';
-const VERSION = '0.3.8'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.3.9'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
@@ -354,15 +354,32 @@ function model() {
         return { ready: false, T, state: 'idle', reasons: [] };
     }
     if (stale) return { ready: false, T, state: 'idle', stale: true, reasons: [] };
-    const all = meas.all || meas.idx <= (list[0] ?? 0);
-    const idx = all ? (list[0] ?? 0) : meas.idx;
-    const remembered = all ? T : list.filter(i => i >= idx).length;
-    const forgotten = T - remembered;
+    const tk = meas.tokens;
+    const firstIdx = list[0] ?? 0;
+    const measAll = meas.all || meas.idx <= firstIdx;
 
     // Memory Hub: สรุปไว้ถึงข้อความไหน
     const mh = c.chatMetadata?.memory_hub;
     const mhActive = !!mh && Number.isInteger(mh.lastEnd) && (mh.lastEnd >= 0 || mh.memories?.length);
     const summarizedUpTo = mhActive ? mh.lastEnd : null;
+
+    // ST ตัดประวัติเพราะงบเต็มจริงไหม: ST ใส่ประวัติจากใหม่ไปเก่าจนข้อความถัดไปใส่ไม่พอ
+    // ถ้ายังเหลือที่ว่างมาก แปลว่าทุกข้อความที่ไม่ได้ถูก extension ตัดออกถูกส่งไปหมด
+    const budgetCut = tk ? (tk.budget - tk.total) < Math.max(3000, tk.budget * 0.03) : !measAll;
+    // Memory Hub ตัดข้อความที่สรุปแล้วออกจากพรอมท์ (ส่งเป็นสรุปแทน) แต่ไม่แตะข้อความล่าสุด keepRaw ข้อความ
+    const mhTrim = mhActive && memoryHubTrims();
+    let trimIdx = firstIdx;
+    if (mhTrim) {
+        const keep = Math.max(2, Number(c.extensionSettings?.memory_hub?.keepRaw) || 12);
+        const after = list.find(i => i > summarizedUpTo) ?? ((list.at(-1) ?? 0) + 1);
+        trimIdx = Math.min(after, list[Math.max(0, list.length - keep)] ?? after);
+    }
+    // ขอบของข้อความที่ส่งแบบเต็ม: งบไม่เต็ม = ทุกอย่างหลังส่วนที่ Memory Hub ตัด
+    // (รอบจำลองไม่ผ่าน Memory Hub และข้อความที่ regex แก้อาจจับคู่ไม่ได้ — ไม่ใช้ขอบจากการจับคู่ในกรณีนี้)
+    const idx = budgetCut ? Math.max(measAll ? firstIdx : meas.idx, trimIdx) : trimIdx;
+    const all = idx <= firstIdx;
+    const remembered = all ? T : list.filter(i => i >= idx).length;
+    const forgotten = T - remembered;
     let unsummarized = null, forgottenSummarized = 0;
     if (mhActive) {
         unsummarized = 0;
@@ -371,8 +388,9 @@ function model() {
             if (i <= summarizedUpTo) forgottenSummarized++; else unsummarized++;
         }
     }
+    // ข้อความที่ไม่ได้ส่งเต็มทั้งหมดอยู่ในสรุปของ Memory Hub — ไม่ได้ลืม
+    const allSummarized = mhActive && forgotten > 0 && unsummarized === 0;
 
-    const tk = meas.tokens;
     let groups = null, fixed = 0, chatTokens = 0;
     if (tk) {
         const sum = Object.fromEntries(GROUPS.map(g => [g.key, 0]));
@@ -387,7 +405,8 @@ function model() {
         chatTokens = sum.chat;
         fixed = tk.total - chatTokens;
     }
-    const room = tk && all ? Math.max(0, tk.budget - tk.total) : (tk ? 0 : null);
+    // ที่ว่างก่อนเริ่มลืม: มีความหมายเมื่อ ST ยังไม่ได้ตัดอะไรเพราะงบ (ส่วนที่ Memory Hub ตัดไม่นับเป็นการลืม)
+    const room = tk && (all || !budgetCut) ? Math.max(0, tk.budget - tk.total) : (tk ? 0 : null);
 
     // สถานะ
     const reasons = [];
@@ -397,7 +416,8 @@ function model() {
     } else if (tk && tk.total > tk.budget * 1.02) {
         level = 2; reasons.push({ level: 2, text: `พรอมท์เกินงบ ${fmt(tk.total - tk.budget)} token`, tip: 'โมเดลอาจตัดคำตอบหรือปฏิเสธคำขอ' });
     }
-    if (s.minWindow > 0 && !all && remembered < s.minWindow) {
+    // จำได้น้อยเพราะงบเต็มเท่านั้น — Memory Hub ตัดข้อความที่สรุปแล้วโดยตั้งใจ ไม่ใช่ปัญหา
+    if (s.minWindow > 0 && !all && budgetCut && remembered < s.minWindow) {
         level = Math.max(level, 1);
         // บอกสาเหตุที่ตรงที่สุด: กันไว้ตอบเยอะ > ส่วนที่ส่งทุกรอบใหญ่ > ข้อความแชทยาว
         let tip = 'ข้อความแชทแต่ละข้อความยาว งบเลยพอใส่ได้ไม่กี่ข้อความ';
@@ -427,7 +447,7 @@ function model() {
     return {
         ready: true, est: meas.est, at: meas.at, T, idx, all, remembered, forgotten,
         lastIdx: list.at(-1) ?? 0, firstIdx: list[0] ?? 0,
-        mhActive, summarizedUpTo, unsummarized, forgottenSummarized,
+        mhActive, mhTrim, allSummarized, budgetCut, summarizedUpTo, unsummarized, forgottenSummarized,
         tk, groups, fixed, chatTokens, room,
         level, state, reasons, snippet, snippetName: hm?.name ?? '',
     };
@@ -451,13 +471,15 @@ function fieldText(key, m) {
     if (!m.ready) return null;
     switch (key) {
         case 'horizon':
+            if (m.allSummarized) return ['จำครบ', `AI จำได้ทั้งแชท (ส่งเต็ม ${m.remembered} · สรุป ${m.forgotten})`];
             return m.all ? ['จำครบ', 'AI ยังจำได้ทั้งแชท'] : [`จำ ${m.remembered}`, `AI จำย้อนได้ ${m.remembered} ข้อความ`];
         case 'room':
-            if (m.room === null || !m.all) return null;
+            if (m.room === null || (!m.all && m.budgetCut)) return null;
             return [`ว่าง ${fmtK(m.room)}`, `เหลืออีก ${fmtK(m.room)} token ก่อนเริ่มลืม`];
         case 'unsummarized':
             return m.unsummarized > 0 ? [`ไม่ได้สรุป ${m.unsummarized}`, `${m.unsummarized} ข้อความที่ลืมไปยังไม่ได้สรุป`] : null;
         case 'forgotten':
+            if (m.allSummarized) return [`สรุป ${m.forgotten}`, `${m.forgotten} ข้อความส่งเป็นสรุป (Memory Hub)`];
             return m.forgotten > 0 ? [`ลืม ${m.forgotten}`, `ลืมไปแล้ว ${m.forgotten} ข้อความ`] : null;
         case 'tokens':
             return m.tk ? [`${fmtK(m.tk.total)}/${fmtK(m.tk.budget)}`, `ส่ง ${fmtK(m.tk.total)} จากงบ ${fmtK(m.tk.budget)} token`] : null;
@@ -652,12 +674,14 @@ function applyMarker() {
     document.body.classList.toggle('mh-hide-st-line', s.enabled && s.marker && s.hideStLine);
     const m = model();
     const showMarker = s.enabled && s.marker && m.ready && !m.all;
-    const dim = s.enabled && s.dim && m.ready && !m.all;
+    const dim = s.enabled && s.dim && m.ready && !m.all && !m.allSummarized; // ส่วนที่อยู่ในสรุปไม่ได้ลืม
     for (const mes of chatEl.querySelectorAll('.mes')) {
         const id = Number(mes.getAttribute('mesid'));
         const isH = showMarker && id === m.idx;
         mes.classList.toggle('mh-horizon', isH);
-        if (isH) mes.dataset.mhLabel = `AI จำได้ตั้งแต่ตรงนี้ · ลืมไปแล้ว ${m.forgotten} ข้อความ`;
+        if (isH) mes.dataset.mhLabel = m.allSummarized
+            ? `ส่งเต็มตั้งแต่ตรงนี้ · ก่อนหน้านี้ ${m.forgotten} ข้อความส่งเป็นสรุป (Memory Hub)`
+            : `AI จำได้ตั้งแต่ตรงนี้ · ลืมไปแล้ว ${m.forgotten} ข้อความ`;
         else delete mes.dataset.mhLabel;
         mes.classList.toggle('mh-forgotten', dim && id < m.idx);
     }
@@ -889,7 +913,13 @@ function renderSheet() {
         return;
     }
 
-    const hero = m.all
+    const roomTxt = m.room !== null && !m.budgetCut ? ` · เหลืออีก <b>${fmt(m.room)}</b> token ก่อนเริ่มลืม` : '';
+    const hero = m.allSummarized
+        ? `<div class="mh-hero">
+                <div class="mh-big mh-big-text">ทั้งแชท</div>
+                <div class="mh-hero-sub">ส่งเต็ม <b>${fmt(m.remembered)}</b> ข้อความล่าสุด · อีก ${fmt(m.forgotten)} ข้อความส่งเป็นสรุปจาก Memory Hub${roomTxt}</div>
+           </div>`
+        : m.all
         ? `<div class="mh-hero">
                 <div class="mh-big mh-big-text">ทั้งแชท</div>
                 <div class="mh-hero-sub">AI ยังจำได้ครบทั้ง ${fmt(m.T)} ข้อความ${m.room !== null ? ` · เหลืออีก <b>${fmt(m.room)}</b> token ก่อนเริ่มลืม` : ''}</div>
@@ -903,7 +933,7 @@ function renderSheet() {
     const segs = timelineSegs(m).filter(x => x.w > 0);
     const legendItems = m.all
         ? (m.tk ? [['fixed', 'ส่วนที่ส่งทุกรอบ'], ['mem', 'ประวัติแชท'], ['room', 'ที่ว่าง']] : [['mem', 'จำได้']])
-        : m.mhActive ? [['sum', 'ลืมแล้ว · สรุปไว้'], ['lost', 'ลืมแล้ว · ยังไม่สรุป'], ['mem', 'จำได้']] : [['gone', 'ลืมแล้ว'], ['mem', 'จำได้']];
+        : m.mhActive ? [['sum', m.mhTrim ? 'ส่งเป็นสรุป' : 'ลืมแล้ว · สรุปไว้'], ['lost', 'ลืมแล้ว · ยังไม่สรุป'], ['mem', m.mhTrim ? 'ส่งเต็ม' : 'จำได้']] : [['gone', 'ลืมแล้ว'], ['mem', 'จำได้']];
     const marker = !m.all ? `<span class="mh-tl-marker" style="left:${((m.forgotten / Math.max(1, m.T)) * 100).toFixed(2)}%"><em>#${m.idx}</em></span>` : '';
     const timeline = m.all && m.tk ? '' : `
         <div class="mh-card">
@@ -911,7 +941,7 @@ function renderSheet() {
             <div class="mh-timeline"><div class="mh-tl-big">${segs.map(x => `<i class="mh-seg mh-seg-${x.cls}" style="flex-basis:${(x.w * 100).toFixed(2)}%"></i>`).join('')}</div>${marker}</div>
             ${!m.all ? `<div class="mh-tl-ends"><span>#${m.firstIdx} เริ่มแชท</span><span>ล่าสุด #${m.lastIdx}</span></div>` : ''}
             <div class="mh-legend">${legendItems.map(([k, l]) => `<span><i class="mh-sw mh-seg-${k}"></i>${l}</span>`).join('')}</div>
-            ${!m.all && m.snippet ? `<button class="mh-quote" data-act="jump"><span class="mh-quote-k">ขอบความจำ · #${m.idx}${m.snippetName ? ` · ${esc(m.snippetName)}` : ''}</span><span class="mh-quote-t">“${esc(m.snippet)}${m.snippet.length >= 90 ? '…' : ''}”</span><span class="mh-quote-go">ไปที่ข้อความนี้ <i class="fa-solid fa-arrow-right"></i></span></button>` : ''}
+            ${!m.all && m.snippet ? `<button class="mh-quote" data-act="jump"><span class="mh-quote-k">${m.allSummarized ? 'เริ่มส่งเต็มที่' : 'ขอบความจำ'} · #${m.idx}${m.snippetName ? ` · ${esc(m.snippetName)}` : ''}</span><span class="mh-quote-t">“${esc(m.snippet)}${m.snippet.length >= 90 ? '…' : ''}”</span><span class="mh-quote-go">ไปที่ข้อความนี้ <i class="fa-solid fa-arrow-right"></i></span></button>` : ''}
         </div>`;
 
     // งบ context
@@ -938,14 +968,14 @@ function renderSheet() {
                 <i class="fa-solid ${r.level === 2 ? 'fa-circle-exclamation' : 'fa-triangle-exclamation'}"></i>
                 <div><b>${esc(r.text)}</b>${r.tip ? `<small>${esc(r.tip)}</small>` : ''}</div>
             </div>`).join('')}</div>`
-        : `<div class="mh-card mh-status"><div class="mh-reason mh-reason-ok"><i class="fa-solid fa-circle-check"></i><div><b>ไม่มีอะไรต้องห่วง</b><small>${m.all ? 'ทุกข้อความยังอยู่ในความจำของ AI' : 'ข้อความเก่าหลุดตามปกติของแชทยาว'}</small></div></div></div>`;
+        : `<div class="mh-card mh-status"><div class="mh-reason mh-reason-ok"><i class="fa-solid fa-circle-check"></i><div><b>ไม่มีอะไรต้องห่วง</b><small>${m.all ? 'ทุกข้อความยังอยู่ในความจำของ AI' : m.allSummarized ? 'ข้อความเก่าส่งเป็นสรุปจาก Memory Hub ไม่มีข้อความไหนหลุดไปโดยไม่ได้สรุป' : 'ข้อความเก่าหลุดตามปกติของแชทยาว'}</small></div></div></div>`;
 
     const when = m.at ? new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
     const src = m.est ? (m.at ? 'ประมาณจากการจำลอง' : 'ประมาณจากข้อมูลเดิมของแชท') : 'จากรอบที่ส่งจริง';
 
     body.innerHTML = `${head}${hero}${timeline}${budget}${replyCardHTML(m)}${status}
         <div class="mh-actions">
-            ${!m.all ? '<button class="mh-btn" data-act="jump"><i class="fa-solid fa-location-crosshairs"></i> ไปที่ขอบความจำ</button>' : ''}
+            ${!m.all ? `<button class="mh-btn" data-act="jump"><i class="fa-solid fa-location-crosshairs"></i> ${m.allSummarized ? 'ไปที่จุดเริ่มส่งเต็ม' : 'ไปที่ขอบความจำ'}</button>` : ''}
             <button class="mh-btn" data-act="measure"><i class="fa-solid fa-rotate"></i> วัดตอนนี้</button>
             ${typeof globalThis.LoreLens?.open === 'function' ? '<button class="mh-btn" data-act="lorelens" title="ดูว่าแต่ละ extension / lorebook entry กินเท่าไหร่ใน Lore Lens"><i class="fa-solid fa-magnifying-glass-chart"></i> ละเอียดใน Lore Lens</button>' : ''}
             <button class="mh-btn mh-btn-icon" data-act="settings" title="ตั้งค่า" aria-label="ตั้งค่า"><i class="fa-solid fa-sliders"></i></button>
@@ -1039,7 +1069,7 @@ async function runRecalc(why) {
                 toastr.warning(`จำลองพรอมท์ไม่สำเร็จ${error ? `: ${esc(error.message ?? error)}` : ' — ST ไม่ได้ประกอบพรอมท์ให้'}<br><small>ส่งข้อความหนึ่งครั้งแทนได้ ตัวเลขจะอัปเดตเอง</small>`, 'Memory Horizon', { escapeHtml: false, timeOut: 6000 });
             } else {
                 const m = model();
-                const what = !m.ready ? 'เสร็จแล้ว' : m.all ? 'AI ยังจำได้ทั้งแชท' : `AI จำย้อนได้ ${m.remembered} ข้อความ`;
+                const what = !m.ready ? 'เสร็จแล้ว' : m.all ? 'AI ยังจำได้ทั้งแชท' : m.allSummarized ? 'AI จำได้ทั้งแชท (ส่วนเก่าเป็นสรุป)' : `AI จำย้อนได้ ${m.remembered} ข้อความ`;
                 toastr.success(`วัดใหม่แล้ว · ${what}`, 'Memory Horizon', { timeOut: 2500 });
             }
         }
@@ -1317,7 +1347,7 @@ async function runDiagnostics() {
     add('chat', `${c.chatId ?? '-'} · len ${c.chat?.length ?? 0} · lastInContext ${c.chatMetadata?.lastInContextMessageId ?? '-'}`);
     add('meas', JSON.stringify({ ...(meas ?? {}), tokens: meas?.tokens ? { total: meas.tokens.total, budget: meas.tokens.budget } : null }));
     const m = model();
-    add('model', JSON.stringify({ ready: m.ready, state: m.state, T: m.T, idx: m.idx, all: m.all, remembered: m.remembered, unsummarized: m.unsummarized }));
+    add('model', JSON.stringify({ ready: m.ready, state: m.state, T: m.T, idx: m.idx, all: m.all, remembered: m.remembered, unsummarized: m.unsummarized, budgetCut: m.budgetCut, mhTrim: m.mhTrim, summarizedUpTo: m.summarizedUpTo, measIdx: meas?.idx, measAll: meas?.all }));
     add('badges', [...badges].map(([p, el]) => {
         const r = el.getBoundingClientRect();
         return `${p}@${el.parentElement?.id || el.parentElement?.className || '?'} ${Math.round(r.width)}x${Math.round(r.height)}`;
